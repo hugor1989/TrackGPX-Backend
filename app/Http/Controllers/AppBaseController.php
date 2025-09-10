@@ -38,15 +38,20 @@ class AppBaseController extends Controller
     /**
      * Respuesta personalizada (ej: login con token)
      */
-    protected function respond(bool $success, $token = null, $data = null, string $message = null, int $code = 200): JsonResponse
-    {
+    protected function respond(
+    bool $success,
+    ?string $token = null,
+    mixed $data = null,
+    ?string $message = null,
+    int $statusCode = 200
+    ) {
         return response()->json([
             'success' => $success,
             'token'   => $token,
             'data'    => $data,
             'message' => $message,
-            'status_code' => $code,
-        ], $code);
+            'status_code' => $statusCode
+        ], $statusCode);
     }
 
  

@@ -7,6 +7,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 
 class Customer extends Authenticatable
 {
+    use HasApiTokens, Notifiable;
+
     protected $fillable = ['name', 'email', 'phone', 'password', 'address', 'status'];
 
     protected $hidden = ['password'];
