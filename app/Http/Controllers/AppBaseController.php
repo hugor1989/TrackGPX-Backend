@@ -9,45 +9,44 @@ use Illuminate\Support\Facades\Response;
 
 class AppBaseController extends Controller
 {
-    public function sendResponse($result, $message): JsonResponse
-    {
-        return Response::json(ResponseUtil::makeResponse($message, $result));
-    }
-
-    public function sendError($error, $code = 422): JsonResponse
-    {
-        return Response::json(ResponseUtil::makeError($error), $code);
-    }
-
-    public function sendSuccess($message): JsonResponse
-    {
-        return Response::json([
-            'success' => true,
-            'message' => $message,
-        ], 200);
-    }
-
-
-    //Estructura de errores y respuestas
-    protected function respond($success, $token= null, $data = null, $message = null, $statusCode = 200)
+    /**
+     * Respuesta exitosa genérica
+     */
+    protected function success($data = null, string $message = 'Success', int $code = 200): JsonResponse
     {
         return response()->json([
-            'success' => $success,
-            'token' => $token,
-            'data' => $data,
+            'success' => true,
             'message' => $message,
-            'status_code' => $statusCode
-        ], $statusCode);
+            'data'    => $data,
+            'status_code' => $code,
+        ], $code);
     }
 
-    public static function error($message = 'Error', $statusCode = 400)
+    /**
+     * Respuesta con error
+     */
+    protected function error(string $message = 'Error', int $code = 400, $errors = []): JsonResponse
     {
         return response()->json([
             'success' => false,
-            'data' => null,
             'message' => $message,
-            'status_code' => $statusCode
-        ], $statusCode);
+            'errors'  => $errors,
+            'status_code' => $code,
+        ], $code);
+    }
+
+    /**
+     * Respuesta personalizada (ej: login con token)
+     */
+    protected function respond(bool $success, $token = null, $data = null, string $message = null, int $code = 200): JsonResponse
+    {
+        return response()->json([
+            'success' => $success,
+            'token'   => $token,
+            'data'    => $data,
+            'message' => $message,
+            'status_code' => $code,
+        ], $code);
     }
 
  
