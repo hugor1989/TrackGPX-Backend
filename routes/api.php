@@ -1,6 +1,6 @@
 <?php
 
-use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\AuthController;
 
 
@@ -13,8 +13,7 @@ Route::post('user/register-user', [AuthController::class, 'registerUser']);
 
 
 Route::middleware('auth:user')->group(function () {
-    Route::get('customers', [CustomerController::class, 'index']);
-    Route::get('vehicles', [VehicleController::class, 'index']);
+
     Route::post('user/session-close', [AuthController::class, 'userLogout']);
 
 });
@@ -23,6 +22,14 @@ Route::middleware('auth:user')->group(function () {
 
 
 #region Metodos para User
+// Registro y login de clientes (público)
+Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
+Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
 
+// Rutas protegidas para clientes
+Route::middleware('auth:customer')->group(function () {
+    Route::post('customer/logout', [CustomerAuthController::class, 'customerLogout']);
+    Route::get('customer/profile', [CustomerAuthController::class, 'profile']);
+});
 
 #endregion
