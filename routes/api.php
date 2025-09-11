@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\UserController;
 
 
 
@@ -15,6 +17,8 @@ Route::post('user/register-user', [AuthController::class, 'registerUser']);
 Route::middleware('auth:user')->group(function () {
 
     Route::post('user/session-close', [AuthController::class, 'userLogout']);
+    Route::get('user/profile', [UserController::class, 'profile']); // ✅ perfil user
+
 
 });
 
@@ -29,7 +33,8 @@ Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
 // Rutas protegidas para clientes
 Route::middleware('auth:customer')->group(function () {
     Route::post('customer/logout', [CustomerAuthController::class, 'customerLogout']);
-    Route::get('customer/profile', [CustomerAuthController::class, 'profile']);
+    Route::get('customer/profile', [CustomerController::class, 'profile']); // ✅ perfil customer
+
 });
 
 #endregion
