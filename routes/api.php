@@ -19,6 +19,12 @@ Route::middleware('auth:user')->group(function () {
     Route::post('user/session-close', [AuthController::class, 'userLogout']);
     Route::get('user/profile', [UserController::class, 'profile']); // ✅ perfil user
 
+    Route::get('get-all-customers', [CustomerController::class, 'GetAllCustomers']);
+    Route::get('customers-by-id/{id}', [CustomerController::class, 'GetCustomerById']);
+    Route::delete('customers-delete/{id}', [CustomerController::class, 'Customerdestroy']);
+    Route::patch('customers-inactive/{id}', [CustomerController::class, 'toggleActiveCustomer']);
+
+
 
 });
 

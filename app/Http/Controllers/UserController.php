@@ -19,4 +19,6 @@ class UserController extends AppBaseController
 
         return $this->success($user, 'Perfil del usuario');
     }
+
+   
 }
