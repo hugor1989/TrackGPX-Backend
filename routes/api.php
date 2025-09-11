@@ -4,10 +4,14 @@ use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\UserController;
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\PlanController;
 
 
 
-
+Route::options('{any}', function () {
+    return response()->json([], 204);
+})->where('any', '.*');
 #region Metodos para User
 
 Route::post('user/login-user', [AuthController::class, 'login']);
@@ -24,7 +28,12 @@ Route::middleware('auth:user')->group(function () {
     Route::delete('customers-delete/{id}', [CustomerController::class, 'Customerdestroy']);
     Route::patch('customers-inactive/{id}', [CustomerController::class, 'toggleActiveCustomer']);
 
-
+    //Gestion de Plans
+    Route::get('get-all-plan', [PlanController::class, 'GetAllPlans']);
+    Route::post('create-plan', [PlanController::class, 'CreatePlan']);
+    Route::get('get-plan-id/{id}', [PlanController::class, 'GetPlanById']);
+    Route::put('update-plan/{id}', [PlanController::class, 'PlanUpdateData']);
+    Route::delete('delete-plan-id/{id}', [PlanController::class, 'PlanDeleteById']);
 
 });
 
