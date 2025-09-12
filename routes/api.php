@@ -6,6 +6,7 @@ use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\PlanController;
+use App\Http\Controllers\SubscriptionController;
 
 
 
@@ -50,6 +51,11 @@ Route::middleware('auth:customer')->group(function () {
     Route::post('customer/logout', [CustomerAuthController::class, 'customerLogout']);
     Route::get('customer/profile', [CustomerController::class, 'profile']); // ✅ perfil customer
 
+    //get plAN
+    Route::get('customer/get-all-plans', [PlanController::class, 'GetAllPlans']);
+
+    //Create Subscription
+    Route::post('subscription/create-subscription', [SubscriptionController::class, 'createSubscription']);
 });
 
 #endregion
