@@ -13,6 +13,8 @@ use App\Http\Controllers\SubscriptionController;
 Route::options('{any}', function () {
     return response()->json([], 204);
 })->where('any', '.*');
+
+
 #region Metodos para User
 
 Route::post('user/login-user', [AuthController::class, 'login']);
@@ -45,6 +47,7 @@ Route::middleware('auth:user')->group(function () {
 // Registro y login de clientes (público)
 Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
 Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
+Route::post('verify-otp', [CustomerAuthController::class, 'verifyOtp']);
 
 // Rutas protegidas para clientes
 Route::middleware('auth:customer')->group(function () {
@@ -56,6 +59,10 @@ Route::middleware('auth:customer')->group(function () {
 
     //Create Subscription
     Route::post('subscription/create-subscription', [SubscriptionController::class, 'createSubscription']);
+
+    //verificar otp
+    
+
 });
 
 #endregion
