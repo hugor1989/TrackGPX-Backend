@@ -7,6 +7,7 @@ use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\PlanController;
 use App\Http\Controllers\SubscriptionController;
+use App\Http\Controllers\WebhookController;
 
 
 
@@ -14,6 +15,11 @@ Route::options('{any}', function () {
     return response()->json([], 204);
 })->where('any', '.*');
 
+
+#region Webhook
+Route::post('/webhooks/openpay', [WebhookController::class, 'handleOpenPayWebhook'])
+    ->name('webhooks.openpay');
+#endregion
 
 #region Metodos para User
 
