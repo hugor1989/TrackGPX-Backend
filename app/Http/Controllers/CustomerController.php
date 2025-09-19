@@ -70,4 +70,44 @@ class CustomerController extends AppBaseController
         return $this->success(null, 'Cliente eliminado correctamente');
     }
 
+    /**
+     * Actualizar perfil del cliente autenticado
+     */
+    public function updateProfile(Request $request)
+    {
+        $customer = $request->user();
+
+        if (!$customer) {
+            return $this->error('Cliente no autenticado.', 401);
+        }
+
+        // Validar los datos de entrada
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|string|max:255',
+            'phone' => 'sometimes|string|max:20'
+        ]);
+
+        if ($validator->fails()) {
+            return $this->error('Datos inválidos', 422, $validator->errors());
+        }
+
+        try {
+            // Actualizar solo los campos que vienen en la request
+            if ($request->has('name')) {
+                $customer->name = $request->name;
+            }
+
+            if ($request->has('phone')) {
+                $customer->phone = $request->phone;
+            }
+
+
+            $customer->save();
+
+            return $this->success($customer, 'Perfil actualizado correctamente');
+
+        } catch (\Exception $e) {
+            return $this->error('Error al actualizar el perfil: ' . $e->getMessage(), 500);
+        }
+    }
 }

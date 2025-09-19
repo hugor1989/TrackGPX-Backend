@@ -60,8 +60,9 @@ Route::middleware('auth:customer')->group(function () {
     //Create Subscription
     Route::post('subscription/create-subscription', [SubscriptionController::class, 'createSubscription']);
 
-    //verificar otp
-    
+    //Actualizar datos del perfil
+    Route::put('customer/profile', [CustomerController::class, 'updateProfile']);
+
 
 });
 
