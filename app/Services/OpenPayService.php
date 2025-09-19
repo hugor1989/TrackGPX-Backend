@@ -22,8 +22,8 @@ class OpenPayService
             request()->ip() // publicIp — si no lo necesitas, puedes pasar null
         );
     }
-   
 
+    //crear plan en open pay
     public function createPlan(array $data)
     {
         try {
@@ -52,7 +52,6 @@ class OpenPayService
             ]);
 
             return $plan;
-
         } catch (OpenpayApiError $e) {
             Log::error('OpenPay API Error:', [
                 'error_code' => $e->getErrorCode(),
@@ -60,14 +59,14 @@ class OpenPayService
                 'description' => $e->getDescription(),
                 'http_code' => $e->getHttpCode()
             ]);
-            
-            throw new Exception('OpenPay Error: ' . $e->getDescription());
 
+            throw new Exception('OpenPay Error: ' . $e->getDescription());
         } catch (Exception $e) {
             Log::error('General error creating plan: ' . $e->getMessage());
             throw new Exception('Error creating plan: ' . $e->getMessage());
         }
     }
+
 
     // 📋 MÉTODOS ADICIONALES ÚTILES:
 
@@ -83,7 +82,6 @@ class OpenPayService
             ];
 
             return $this->openpay->customers->add($customerData);
-
         } catch (\OpenpayApiError $e) {
             throw new Exception('OpenPay Customer Error: ' . $e->getDescription());
         }
@@ -99,7 +97,6 @@ class OpenPayService
 
             $customer = $this->openpay->customers->get($customerId);
             return $customer->subscriptions->add($subscriptionData);
-
         } catch (OpenpayApiError $e) {
             throw new Exception('OpenPay Subscription Error: ' . $e->getDescription());
         }

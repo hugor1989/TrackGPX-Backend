@@ -41,7 +41,6 @@ Route::middleware('auth:user')->group(function () {
     Route::get('get-all-plan', [PlanController::class, 'GetAllPlans']);
     Route::post('create-plan', [PlanController::class, 'CreatePlan']);
     Route::get('get-plan-id/{id}', [PlanController::class, 'GetPlanById']);
-    Route::put('update-plan/{id}', [PlanController::class, 'PlanUpdateData']);
     Route::delete('delete-plan-id/{id}', [PlanController::class, 'PlanDeleteById']);
 
 });

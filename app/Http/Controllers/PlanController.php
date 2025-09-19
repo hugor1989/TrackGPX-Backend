@@ -64,7 +64,7 @@ class PlanController extends AppBaseController
             return $this->error('Error creating plan: ' . $e->getMessage(), 500);
         }
     }
-   
+
 
     // Ver un plan
     public function GetPlanById($id)
@@ -76,27 +76,6 @@ class PlanController extends AppBaseController
         }
 
         return $this->success($plan, 'Plan encontrado');
-    }
-
-    // Actualizar plan
-    public function PlanUpdateData(Request $request, $id)
-    {
-        $plan = Plan::find($id);
-
-        if (!$plan) {
-            return $this->error('Plan no encontrado', 404);
-        }
-
-        $request->validate([
-            'name'          => 'sometimes|string|max:255',
-            'price'         => 'sometimes|numeric|min:0',
-            'duration_days' => 'sometimes|integer|min:1',
-            'description'   => 'nullable|string'
-        ]);
-
-        $plan->update($request->all());
-
-        return $this->success($plan, 'Plan actualizado correctamente');
     }
 
     // Eliminar plan
