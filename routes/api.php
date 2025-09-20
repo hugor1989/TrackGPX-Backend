@@ -48,7 +48,7 @@ Route::middleware('auth:user')->group(function () {
 #endregion
 
 
-#region Metodos para User
+#region Metodos para Customer
 // Registro y login de clientes (público)
 Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
 Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
@@ -62,8 +62,13 @@ Route::middleware('auth:customer')->group(function () {
     //get plAN
     Route::get('customer/get-all-plans', [PlanController::class, 'GetAllPlans']);
 
+    
+
     //Create Subscription
-    Route::post('subscription/create-subscription', [SubscriptionController::class, 'createSubscription']);
+    Route::post('subscription/create-subscription', [SubscriptionController::class, 'createPending']);
+    Route::get('subscription/get-subscriptions', [SubscriptionController::class, 'getUserSubscriptions']);
+    Route::post('subscription/process-payment/{id}', [SubscriptionController::class, 'processPayment']);
+
 
     //Actualizar datos del perfil
     Route::put('customer/profile', [CustomerController::class, 'updateProfile']);
