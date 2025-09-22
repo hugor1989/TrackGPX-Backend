@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\PlanController;
 use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\WebhookController;
+use App\Http\Controllers\CardController;
 
 
 
@@ -62,16 +63,20 @@ Route::middleware('auth:customer')->group(function () {
     //get plAN
     Route::get('customer/get-all-plans', [PlanController::class, 'GetAllPlans']);
 
-    
-
     //Create Subscription
     Route::post('subscription/create-subscription', [SubscriptionController::class, 'createPending']);
     Route::get('subscription/get-subscriptions', [SubscriptionController::class, 'getUserSubscriptions']);
-    Route::post('subscription/process-payment/{id}', [SubscriptionController::class, 'processPayment']);
+    Route::post('subscription/process-payment', [SubscriptionController::class, 'pay']);
 
 
     //Actualizar datos del perfil
     Route::put('customer/profile', [CustomerController::class, 'updateProfile']);
+
+    // Tarjetas
+    Route::post('customer/add-cards', [CardController::class, 'addCard']);
+    Route::get('customer/get-cards', [CardController::class, 'getCards']);
+    Route::get('customer/get-card-Id/{cardId}', [CardController::class, 'getCard']);
+    Route::delete('customer/delete-cards/{cardId}', [CardController::class, 'deleteCard']);
 
 
 });

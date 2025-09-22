@@ -8,10 +8,18 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Services\OpenPayService;
 
 
 class SubscriptionController extends AppBaseController
 {
+    protected $openPayService;
+
+    public function __construct(OpenPayService $openPayService)
+    {
+        $this->openPayService = $openPayService;
+    }
+
     public function createPending(Request $request)
     {
         $request->validate([
@@ -33,8 +41,6 @@ class SubscriptionController extends AppBaseController
             if ($existingPending) {
 
                 return $this->error('Ya tienes una suscripción pendiente para este plan', 404);
-
-               
             }
 
             // Solo crear en tu BD - NO en OpenPay todavía
@@ -62,8 +68,6 @@ class SubscriptionController extends AppBaseController
             DB::rollBack();
 
             return $this->error('Error creando suscripción: ' . $e->getMessage(), 500);
-
-            
         }
     }
 
@@ -75,7 +79,7 @@ class SubscriptionController extends AppBaseController
     {
         try {
             $user = Auth::user();
-            
+
             $subscriptions = Subscription::with(['plan', 'device'])
                 ->where('customer_id', $user->id)
                 ->orderBy('created_at', 'desc')
@@ -85,10 +89,9 @@ class SubscriptionController extends AppBaseController
                 'success' => true,
                 'data' => $subscriptions
             ]);
-
         } catch (\Exception $e) {
             Log::error('Error getting user subscriptions: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error obteniendo suscripciones'
@@ -203,5 +206,65 @@ class SubscriptionController extends AppBaseController
             'success' => true,
             'statuses' => $statuses
         ]);
+    }
+    // app/Http/Controllers/SubscriptionController.php
+    public function pay(Request $request)
+    {
+        $request->validate([
+            'subscription_id' => 'required|integer|exists:subscriptions,id',
+            'card_id' => 'required|string',
+            'device_session_id' => 'required|string' // ← Validar el nuevo campo
+        ]);
+
+        $user = Auth::user();
+        $subscription = Subscription::find($request->subscription_id);
+
+        // Verificaciones de seguridad...
+        if ($subscription->customer_id !== $user->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No autorizado'
+            ], 403);
+        }
+
+        if ($subscription->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'La suscripción no está pendiente de pago'
+            ], 400);
+        }
+
+        try {
+            // Procesar el pago con device_session_id
+            $result = $this->openPayService->paySubscription(
+                $user->openpay_customer_id,
+                $subscription,
+                $request->card_id,
+                $request->device_session_id // ← Pasar el device_session_id
+            );
+
+            if ($result['success']) {
+                $subscription->update([
+                    'status' => 'active',
+                    'start_date' => now(),
+                    'end_date' => now()->addMonths($subscription->plan->interval === 'month' ? 1 : 12)
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Pago procesado correctamente'
+                ]);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => $result['error']
+            ], 400);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error procesando el pago: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

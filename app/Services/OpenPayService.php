@@ -67,6 +67,42 @@ class OpenPayService
         }
     }
 
+    public function paySubscription($customerId, $subscription, $cardId, $deviceSessionId)
+    {
+        try {
+            $openpay = $this->openpay;
+            $customer = $openpay->customers->get($customerId);
+
+            $chargeData = [
+                'method' => 'card',
+                'source_id' => $cardId,
+                'amount' => (float) $subscription->plan->price,
+                'description' => 'Pago de suscripción: ' . $subscription->plan->name,
+                'order_id' => 'SUB-' . $subscription->id . '-' . time(),
+                'device_session_id' => $deviceSessionId, // ← Agregar device_session_id
+            ];
+
+            $charge = $customer->charges->create($chargeData);
+
+            return [
+                'success' => true,
+                'charge_id' => $charge->id
+            ];
+        } catch (OpenpayApiError $e) {
+            Log::error('OpenPay API Error processing payment: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => $e->getDescription()
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error processing payment: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
 
     // 📋 MÉTODOS ADICIONALES ÚTILES:
 
@@ -78,11 +114,11 @@ class OpenPayService
                 'email' => $data['email'],
                 'last_name' => $data['last_name'] ?? '',
                 'phone_number' => $data['phone_number'] ?? '',
-                'requires_account' => false
+                'requires_account' => false,
             ];
 
             return $this->openpay->customers->add($customerData);
-        } catch (\OpenpayApiError $e) {
+        } catch (OpenpayApiError $e) {
             throw new Exception('OpenPay Customer Error: ' . $e->getDescription());
         }
     }
@@ -142,4 +178,142 @@ class OpenPayService
 
         return hash_equals($computedSignature, $signature);
     }
+
+    #region Gestion de Tarjetas
+    /**
+     * Agregar una tarjeta a un cliente
+     */
+    public function addCardToCustomer($customerId, $tokenId, $deviceSessionId)
+    {
+        try {
+            $openpay = $this->openpay;
+            $customer = $openpay->customers->get($customerId);
+
+            $cardData = [
+                'token_id' => $tokenId,
+                'device_session_id' => $deviceSessionId
+            ];
+
+            $card = $customer->cards->add($cardData);
+
+            return [
+                'success' => true,
+                'card' => $card
+            ];
+        } catch (OpenpayApiError $e) {
+            Log::error('OpenPay API Error adding card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getDescription(),
+                'error_code' => $e->getErrorCode(),
+                'category' => $e->getCategory()
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error adding card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Obtener todas las tarjetas de un cliente
+     */
+    public function getCustomerCards($customerId)
+    {
+        try {
+            $openpay = $this->openpay;
+            $customer = $openpay->customers->get($customerId);
+
+            // Pasar un array vacío como parámetro a getList()
+            $cards = $customer->cards->getList([]);
+            return [
+                'success' => true,
+                'cards' => $cards
+            ];
+        } catch (OpenpayApiError $e) {
+            Log::error('OpenPay API Error getting cards: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getDescription()
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error getting cards: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Eliminar una tarjeta de un cliente
+     */
+    public function deleteCustomerCard($customerId, $cardId)
+    {
+        try {
+            $openpay = $this->openpay;
+            $customer = $openpay->customers->get($customerId);
+
+            $card = $customer->cards->get($cardId);
+            $card->delete();
+
+            return [
+                'success' => true
+            ];
+        } catch (OpenpayApiError $e) {
+            Log::error('OpenPay API Error deleting card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getDescription()
+            ];
+        } catch (Exception $e) {
+            Log::error('Error deleting card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Obtener una tarjeta específica de un cliente
+     */
+    public function getCustomerCard($customerId, $cardId)
+    {
+        try {
+            $openpay = $this->openpay;
+            $customer = $openpay->customers->get($customerId);
+
+            $card = $customer->cards->get($cardId);
+
+            return [
+                'success' => true,
+                'card' => $card
+            ];
+        } catch (OpenpayApiError $e) {
+            Log::error('OpenPay API Error getting card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getDescription()
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error getting card: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    #endregion
 }
