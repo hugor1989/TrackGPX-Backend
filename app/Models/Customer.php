@@ -13,7 +13,7 @@ class Customer extends Authenticatable
 {
     use HasApiTokens, Notifiable;
 
-    protected $fillable = ['name', 'email', 'phone', 'password', 'address', 'status'];
+    protected $fillable = ['name', 'openpay_customer_id', 'email', 'phone', 'password', 'address', 'status'];
 
     protected $hidden = ['password'];
 

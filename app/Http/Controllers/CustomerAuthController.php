@@ -11,10 +11,20 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\VerificationCodeMail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use App\Services\OpenPayService;
+
 
 class CustomerAuthController extends AppBaseController
 {
 
+     protected $openPayService;
+
+    // Inyectar el servicio en el constructor
+    public function __construct(OpenPayService $openPayService)
+    {
+        $this->openPayService = $openPayService;
+    }
     public function customerRegister(Request $request)
     {
         $request->validate([
@@ -86,6 +96,72 @@ class CustomerAuthController extends AppBaseController
     }
 
     public function verifyOtp(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email|exists:customers,email',
+            'code'  => 'required|string|size:5'
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            $customer = Customer::where('email', $request->email)->first();
+
+            if (!$customer) {
+                return $this->respond(false, null, null, 'Cliente no encontrado', 404);
+            }
+
+            // Buscar código válido usando el scope del modelo
+            $verificationCode = VerificationCode::forCustomer($customer->id)
+                ->where('code', $request->code)
+                ->valid()
+                ->first();
+
+            if (!$verificationCode) {
+                return $this->respond(false, null, null, 'Código inválido o expirado', 400);
+            }
+
+            // ✅ Crear customer en OpenPay (solo si no existe)
+            if (!$customer->openpay_customer_id) {
+                $openpayCustomer = $this->openPayService->createCustomer([
+                    'name'         => $customer->name,
+                    'last_name'    => $customer->last_name,
+                    'email'        => $customer->email,
+                    'phone_number' => $customer->phone ?? '',
+                ]);
+
+                $customer->openpay_customer_id = $openpayCustomer->id;
+            }
+
+            // Marcar código como usado
+            $verificationCode->markAsUsed();
+
+            // Activar el cliente y marcar email como verificado
+            $customer->update([
+                'status' => 'active',
+                'openpay_customer_id' => $customer->openpay_customer_id
+            ]);
+
+            // Generar token de acceso
+            $token = $customer->createToken('customer_token', ['customer'])->plainTextToken;
+
+            DB::commit();
+
+            return $this->respond(true, $token, [
+                'customer'             => $customer,
+                'verified'             => true,
+                'openpay_customer_id'  => $customer->openpay_customer_id,
+            ], 'Cuenta verificada correctamente', 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return $this->respond(false, null, null, 'Error en verificación: ' . $e->getMessage(), 500);
+        }
+    }
+
+   
+    public function verifyOtpN(Request $request)
     {
         $request->validate([
             'email' => 'required|email|exists:customers,email',
