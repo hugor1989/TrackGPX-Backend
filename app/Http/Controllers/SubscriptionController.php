@@ -99,6 +99,122 @@ class SubscriptionController extends AppBaseController
         }
     }
 
+    /**
+     * Obtener suscripciones para mostrar al admin  
+     * GET /api/subscriptions
+     */
+    public function getAdminSubscriptions(Request $request)
+    {
+        try {
+            $status = $request->query('status');
+
+            $query = Subscription::with([
+                'plan',
+                'customer:id,name,email,phone,address',
+                'device:id,device_id,name,imei'
+            ]);
+
+            // Usar scopes para filtros
+            if ($status && $status !== 'all') {
+                switch ($status) {
+                    case Subscription::STATUS_PENDING:
+                        $query->pending();
+                        break;
+                    case Subscription::STATUS_ACTIVE:
+                        $query->active();
+                        break;
+                    case Subscription::STATUS_CANCELLED:
+                        $query->where('status', Subscription::STATUS_CANCELLED);
+                        break;
+                    case Subscription::STATUS_EXPIRED:
+                        $query->where('status', Subscription::STATUS_EXPIRED);
+                        break;
+                }
+            }
+
+            $subscriptions = $query->orderBy('created_at', 'desc')->get();
+
+            $formattedSubscriptions = $subscriptions->map(function ($subscription) {
+                return [
+                    'id' => $subscription->id,
+                    'customer_id' => $subscription->customer_id,
+                    'device_id' => $subscription->device_id,
+                    'plan_id' => $subscription->plan_id,
+                    'start_date' => $subscription->start_date?->toDateString(),
+                    'end_date' => $subscription->end_date?->toDateString(),
+                    'status' => $subscription->status,
+                    'payment_reference' => $subscription->payment_reference,
+                    'paid_at' => $subscription->paid_at?->toDateTimeString(),
+                    'openpay_subscription_id' => $subscription->openpay_subscription_id,
+                    'created_at' => $subscription->created_at?->toDateTimeString(),
+                    'updated_at' => $subscription->updated_at?->toDateTimeString(),
+
+                    'customer' => $subscription->customer ? [
+                        'id' => $subscription->customer->id,
+                        'name' => $subscription->customer->name,
+                        'email' => $subscription->customer->email,
+                        'phone' => $subscription->customer->phone,
+                        'address' => $subscription->customer->address
+                    ] : null,
+
+                    'plan' => $subscription->plan ? [
+                        'id' => $subscription->plan->id,
+                        'name' => $subscription->plan->name,
+                        'description' => $subscription->plan->description,
+                        'price' => $subscription->plan->price,
+                        'interval' => $subscription->plan->interval,
+                        'interval_count' => $subscription->plan->interval_count,
+                        'features' => $subscription->plan->features
+                    ] : null,
+
+                    'device' => $subscription->device ? [
+                        'id' => $subscription->device->id,
+                        'device_id' => $subscription->device->device_id,
+                        'name' => $subscription->device->name,
+                        'imei' => $subscription->device->imei
+                    ] : null
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedSubscriptions
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error getting admin subscriptions: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error obteniendo suscripciones'
+            ], 500);
+        }
+    }
+
+    public function getSubscriptionStats()
+    {
+        try {
+            $stats = [
+                'total' => Subscription::count(),
+                'active' => Subscription::active()->count(),
+                'pending' => Subscription::pending()->count(),
+                'cancelled' => Subscription::where('status', Subscription::STATUS_CANCELLED)->count(),
+                'expired' => Subscription::where('status', Subscription::STATUS_EXPIRED)->count(),
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $stats
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error getting subscription stats: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error obteniendo estadísticas'
+            ], 500);
+        }
+    }
+
     // NUEVO MÉTODO: Procesar pago (aquí sí interactúas con OpenPay)
     public function processPayment(Request $request, $subscriptionId)
     {

@@ -44,6 +44,9 @@ Route::middleware('auth:user')->group(function () {
     Route::get('get-plan-id/{id}', [PlanController::class, 'GetPlanById']);
     Route::delete('delete-plan-id/{id}', [PlanController::class, 'PlanDeleteById']);
 
+    Route::get('admin/subscriptions', [SubscriptionController::class, 'getAdminSubscriptions']);
+    Route::get('admin/subscriptions/stats', [SubscriptionController::class, 'getSubscriptionStats']);
+
 });
 
 #endregion
