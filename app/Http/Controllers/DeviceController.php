@@ -536,6 +536,7 @@ class DeviceController extends Controller
             DeviceLog::create([
                 'device_id' => $device->id,
                 'action' => 'activation',
+                'raw_data' => null,
                 'description' => 'Dispositivo activado via app móvil por usuario ID: ' . $request->user_id,
                 'ip_address' => $request->ip()
             ]);
