@@ -135,7 +135,7 @@ class DeviceController extends Controller
     public function autoRegisterDevices(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'imei' => 'required|digits:15|unique:devices,imei',
+            'imei' => 'required|unique:devices,imei',
             'ip_address' => 'nullable|ip',
         ]);
 
