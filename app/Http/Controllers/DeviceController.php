@@ -150,7 +150,7 @@ class DeviceController extends Controller
         try {
             $device = Device::create([
                 'imei' => $request->imei,
-                'serial_number' => '',
+                'serial_number' => null,
                 'protocol' => 'JT808',
                 'status' => 'pending',
                 'manufacturer' => 'Cherry',
