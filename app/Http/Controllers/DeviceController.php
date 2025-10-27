@@ -150,11 +150,11 @@ class DeviceController extends Controller
         try {
             $device = Device::create([
                 'imei' => $request->imei,
-                'serial_number' => $request->serial_number ?? 'AUTO-' . substr($request->imei, -6),
+                'serial_number' => '',
                 'protocol' => 'JT808',
-                'status' => 'detected',
-                'manufacturer' => 'AUTO',
-                'model' => 'AUTO',
+                'status' => 'pending',
+                'manufacturer' => 'Cherry',
+                'model' => '',
                 'ip_address' => $request->ip_address ?? $request->ip(),
                 'activation_code' => $this->generateActivationCode(),
                 'config_parameters' => $this->getDefaultConfigParameters(),
