@@ -9,6 +9,7 @@ use App\Http\Controllers\PlanController;
 use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\WebhookController;
 use App\Http\Controllers\CardController;
+use App\Http\Controllers\DeviceController;
 
 
 
@@ -47,13 +48,21 @@ Route::middleware('auth:user')->group(function () {
     Route::get('admin/subscriptions', [SubscriptionController::class, 'getAdminSubscriptions']);
     Route::get('admin/subscriptions/stats', [SubscriptionController::class, 'getSubscriptionStats']);
 
+    //Devices
+    Route::get('devices/get-all-devices', [DeviceController::class, 'getAllDevices']);
+    Route::post('devices/create-device', [DeviceController::class, 'createDevice']);
+    Route::get('devices/statistics', [DeviceController::class, 'statistics']);
+    Route::post('devices/import', [DeviceController::class, 'import']);
+    Route::get('devices/get-by-id/{id}', [DeviceController::class, 'getDevicebyId']);
+    Route::put('devices/update-data-byId{id}', [DeviceController::class, 'updateDevice']);
+    Route::delete('devices/delete-byId{id}', [DeviceController::class, 'deletebyId']);
+    Route::post('devices/generate-activation-code/{id}', [DeviceController::class, 'generateActivationCodeDevice']);
 });
 
 #endregion
 
 
 #region Metodos para Customer
-// Registro y login de clientes (público)
 Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
 Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
 Route::post('verify-otp', [CustomerAuthController::class, 'verifyOtp']);
@@ -81,7 +90,17 @@ Route::middleware('auth:customer')->group(function () {
     Route::get('customer/get-card-Id/{cardId}', [CardController::class, 'getCard']);
     Route::delete('customer/delete-cards/{cardId}', [CardController::class, 'deleteCard']);
 
+    //Activate GPS
+    Route::post('devices/activate-gps', [DeviceController::class, 'activateFromApp']);
+
+    //Obtener los Devices en la App ligados al customer
+    Route::get('devices/customer/{Id}', [DeviceController::class, 'getDevicesByCustomer']);
 
 });
+
+#endregion
+
+#region Endpoint para solo registro de device desde tco
+Route::post('auto/devices/auto-register', [DeviceController::class, 'autoRegisterDevices']);
 
 #endregion
