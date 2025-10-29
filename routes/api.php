@@ -10,6 +10,8 @@ use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\WebhookController;
 use App\Http\Controllers\CardController;
 use App\Http\Controllers\DeviceController;
+use App\Http\Controllers\LocationController;
+
 
 
 
@@ -102,5 +104,6 @@ Route::middleware('auth:customer')->group(function () {
 
 #region Endpoint para solo registro de device desde tco
 Route::post('auto/devices/auto-register', [DeviceController::class, 'autoRegisterDevices']);
+Route::post('auto/locations/insert', [LocationController::class, 'createInsertLocations']);
 
 #endregion
