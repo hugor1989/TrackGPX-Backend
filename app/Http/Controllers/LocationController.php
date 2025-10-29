@@ -27,7 +27,7 @@ class LocationController extends Controller
             ]);
 
             // Buscar el dispositivo por IMEI
-            $device = Device::where('emei', $validated['imei'])->first();
+            $device = Device::where('imei', $validated['imei'])->first();
 
             if (!$device) {
                 return response()->json([
