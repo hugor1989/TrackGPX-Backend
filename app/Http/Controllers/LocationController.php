@@ -19,7 +19,7 @@ class LocationController extends Controller
             $validated = $request->validate([
                 'imei' => 'required|string|max:255',
                 'latitude' => 'required|numeric',
-                'longitude' => 'required|numeric', // Corregí "longitute" a "longitude"
+                'longitude' => 'required|numeric',
                 'speed' => 'nullable|numeric',
                 'battery_level' => 'nullable|numeric',
                 'altitude' => 'nullable|numeric',
@@ -36,6 +36,16 @@ class LocationController extends Controller
                 ], 404);
             }
 
+            // Manejar el formato del timestamp
+            $timestamp = $validated['timestamp'] ?? now();
+
+            // Si es string, convertir a formato MySQL
+            if (is_string($timestamp)) {
+                $timestamp = date('Y-m-d H:i:s', strtotime($timestamp));
+            } else if ($timestamp instanceof \Carbon\Carbon) {
+                $timestamp = $timestamp->format('Y-m-d H:i:s');
+            }
+
             // Crear la nueva ubicación
             $location = Location::create([
                 'device_id' => $device->id,
@@ -44,7 +54,7 @@ class LocationController extends Controller
                 'speed' => $validated['speed'] ?? null,
                 'battery_level' => $validated['battery_level'] ?? null,
                 'altitude' => $validated['altitude'] ?? null,
-                'timestamp' => $validated['timestamp'] ?? now()->toISOString(),
+                'timestamp' => $timestamp,
             ]);
 
             return response()->json([
@@ -52,14 +62,12 @@ class LocationController extends Controller
                 'message' => 'Ubicación guardada correctamente',
                 'data' => $location
             ], 201);
-
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error de validación',
                 'errors' => $e->errors()
             ], 422);
-            
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -92,7 +100,6 @@ class LocationController extends Controller
                 'success' => true,
                 'data' => $locations
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
