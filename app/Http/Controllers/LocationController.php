@@ -17,15 +17,6 @@ class LocationController extends Controller
     public function createInsertLocations(Request $request): JsonResponse
     {
         try {
-
-            // Log del request completo ANTES de validar
-            Log::channel('daily')->info('Location Insert Request Received', [
-                'full_request' => $request->all(),
-                'headers' => $request->headers->all(),
-                'ip' => $request->ip(),
-                'user_agent' => $request->userAgent(),
-                'timestamp' => now()->toString()
-            ]);
             // Validar los datos recibidos
             $validated = $request->validate([
                 'imei' => 'required|string|max:255',
@@ -45,6 +36,22 @@ class LocationController extends Controller
                     'success' => false,
                     'message' => 'Dispositivo no encontrado'
                 ], 404);
+            }
+
+            // Validar que el dispositivo esté activo
+            if ($device->status !== 'active') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Dispositivo no está activo. Status actual: ' . $device->status
+                ], 403);
+            }
+
+            // Validar que el dispositivo tenga un cliente asignado
+            if (empty($device->customer_id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Dispositivo no tiene un cliente asignado'
+                ], 403);
             }
 
             // Procesar el timestamp
@@ -73,12 +80,14 @@ class LocationController extends Controller
                 'message' => 'Ubicación guardada correctamente',
                 'data' => $location
             ], 201);
+
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error de validación',
                 'errors' => $e->errors()
             ], 422);
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -87,7 +96,6 @@ class LocationController extends Controller
             ], 500);
         }
     }
-
     /**
      * Obtener ubicaciones por IMEI del dispositivo
      */
