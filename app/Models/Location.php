@@ -3,30 +3,38 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Carbon\Carbon;
 
 class Location extends Model
 {
-    protected $table = 'locations';
-    
     protected $fillable = [
         'device_id', 
         'latitude', 
         'longitude', 
         'speed', 
-        'battery_level', // Agregar este campo
+        'battery_level',
         'altitude', 
         'timestamp'
     ];
 
-    // Si tu tabla tiene un nombre diferente, especifícalo
-    // protected $table = 'locations';
-
-    // Si quieres desactivar timestamps automáticos
     public $timestamps = false;
 
-    // O si quieres usar timestamps, pero el campo timestamp es personalizado
-    // const CREATED_AT = 'timestamp';
-    // const UPDATED_AT = null;
+    // Convertir el timestamp a la zona horaria correcta al guardar
+    public function setTimestampAttribute($value)
+    {
+        // Si viene el timestamp del dispositivo, usarlo y convertir a México
+        if ($value) {
+            $this->attributes['timestamp'] = Carbon::parse($value)->setTimezone('America/Mexico_City');
+        } else {
+            $this->attributes['timestamp'] = Carbon::now('America/Mexico_City');
+        }
+    }
+
+    // Convertir a la zona horaria correcta al leer
+    public function getTimestampAttribute($value)
+    {
+        return Carbon::parse($value)->setTimezone('America/Mexico_City');
+    }
 
     public function device()
     {

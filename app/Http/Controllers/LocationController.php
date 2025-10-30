@@ -6,6 +6,8 @@ use App\Models\Device;
 use App\Models\Location;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class LocationController extends Controller
 {
@@ -15,6 +17,15 @@ class LocationController extends Controller
     public function createInsertLocations(Request $request): JsonResponse
     {
         try {
+
+            // Log del request completo ANTES de validar
+            Log::channel('daily')->info('Location Insert Request Received', [
+                'full_request' => $request->all(),
+                'headers' => $request->headers->all(),
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'timestamp' => now()->toString()
+            ]);
             // Validar los datos recibidos
             $validated = $request->validate([
                 'imei' => 'required|string|max:255',
@@ -36,14 +47,14 @@ class LocationController extends Controller
                 ], 404);
             }
 
-            // Manejar el formato del timestamp
-            $timestamp = $validated['timestamp'] ?? now();
-
-            // Si es string, convertir a formato MySQL
-            if (is_string($timestamp)) {
-                $timestamp = date('Y-m-d H:i:s', strtotime($timestamp));
-            } else if ($timestamp instanceof \Carbon\Carbon) {
-                $timestamp = $timestamp->format('Y-m-d H:i:s');
+            // Procesar el timestamp
+            $timestamp = $validated['timestamp'] ?? null;
+            if ($timestamp) {
+                // Convertir el timestamp recibido a zona horaria de México
+                $timestamp = Carbon::parse($timestamp)->setTimezone('America/Mexico_City');
+            } else {
+                // Usar hora actual de México
+                $timestamp = Carbon::now('America/Mexico_City');
             }
 
             // Crear la nueva ubicación
