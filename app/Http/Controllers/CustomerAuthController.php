@@ -186,7 +186,7 @@ class CustomerAuthController extends AppBaseController
 
 
 
-    public function customerLogin2(Request $request)
+    public function customerLoginNuevo(Request $request)
     {
         $request->validate([
             'email'    => 'required|email',
@@ -197,24 +197,26 @@ class CustomerAuthController extends AppBaseController
         $customer = Customer::with(['devices:id,imei,customer_id'])
             ->where('email', $request->email)
             ->first();
+        Log::info('Devices del customer', ['devices' => $customer]);
 
         if (!$customer || !Hash::check($request->password, $customer->password)) {
             return $this->error('Credenciales incorrectas', 401);
         }
 
         $token = $customer->createToken('customer_token', ['customer'])->plainTextToken;
+        Log::info('Devices del customer', ['devices' => $customer->devices]);
 
        // return $this->respond(true, $token, $customer, 'Login de cliente correcto');
 
         return $this->respond(true, $token, [
-            
+            'hola' => 1,
             'customer' => $customer,
         ], 'Login de cliente correcto', 200);
     }
 
 
 
-    public function customerLogin(Request $request)
+  /*   public function customerLogin(Request $request)
     {
         $request->validate([
             'email'    => 'required|email',
@@ -230,7 +232,7 @@ class CustomerAuthController extends AppBaseController
         $token = $customer->createToken('customer_token', ['customer'])->plainTextToken;
 
         return $this->respond(true, $token, $customer, 'Login de cliente correcto');
-    }
+    } */
 
     public function customerLogout(Request $request)
     {

@@ -66,7 +66,7 @@ Route::middleware('auth:user')->group(function () {
 
 #region Metodos para Customer
 Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
-Route::post('customer/login', [CustomerAuthController::class, 'customerLogin2']);
+Route::post('customer/login', [CustomerAuthController::class, 'customerLoginNuevo']);
 Route::post('verify-otp', [CustomerAuthController::class, 'verifyOtp']);
 
 // Rutas protegidas para clientes
