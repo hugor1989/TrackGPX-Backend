@@ -36,4 +36,9 @@ class Customer extends Authenticatable
     {
         return $this->hasMany(Notification::class);
     }
+
+    public function devices()
+    {
+        return $this->hasMany(Device::class, 'customer_id');
+    }
 }

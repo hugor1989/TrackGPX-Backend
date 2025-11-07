@@ -7,6 +7,7 @@ use App\Models\Device;
 use App\Models\Vehicle;
 use App\Models\SimCard;
 use App\Models\DeviceLog;
+use App\Models\Location;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -716,4 +717,68 @@ class DeviceController extends Controller
             ]
         ];
     }
+
+   /*  public function getNearbyDevices($imei, Request $request)
+    {
+        $radius = $request->query('radius', 2); // kilómetros (por defecto 2 km)
+
+        // 1️⃣ Buscar el dispositivo base (default)
+        $mainDevice = Device::where('imei', $imei)->first();
+
+        if (!$mainDevice) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Dispositivo principal no encontrado'
+            ], 404);
+        }
+
+        // 2️⃣ Obtener última ubicación del GPS principal
+        $mainLocation = Location::where('device_id', $mainDevice->id)
+            ->latest('created_at')
+            ->first();
+
+        if (!$mainLocation) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se encontró ubicación para el GPS principal'
+            ], 404);
+        }
+
+        $lat = $mainLocation->latitude;
+        $lon = $mainLocation->longitude;
+
+        // 3️⃣ Buscar los demás dispositivos del mismo cliente
+        $nearbyDevices = Device::where('customer_id', $mainDevice->customer_id)
+            ->where('imei', '!=', $imei)
+            ->join('locations', 'devices.id', '=', 'locations.device_id')
+            ->select(
+                'devices.id',
+                'devices.imei',
+                'locations.lat',
+                'locations.lon',
+                DB::raw("(
+                    6371 * acos(
+                        cos(radians($lat)) * cos(radians(locations.lat)) *
+                        cos(radians(locations.lon) - radians($lon)) +
+                        sin(radians($lat)) * sin(radians(locations.lat))
+                    )
+                ) AS distance")
+            )
+            ->having('distance', '<=', $radius)
+            ->orderBy('distance', 'asc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Dispositivos cercanos obtenidos correctamente',
+            'data' => [
+                'main_device' => [
+                    'imei' => $imei,
+                    'lat' => $lat,
+                    'lon' => $lon
+                ],
+                'nearby_devices' => $nearbyDevices
+            ]
+        ]);
+    } */
 }

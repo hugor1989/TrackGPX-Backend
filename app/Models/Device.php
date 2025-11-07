@@ -64,7 +64,7 @@ class Device extends Model
      */
     public function customer()
     {
-        return $this->belongsTo(Customer::class, 'user_id');
+        return $this->belongsTo(Customer::class, 'customer_id');
     }
     // Nueva relación para acceder al usuario a través del vehículo
     public function user()

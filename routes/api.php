@@ -66,7 +66,7 @@ Route::middleware('auth:user')->group(function () {
 
 #region Metodos para Customer
 Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRegister']);
-Route::post('customer/login', [CustomerAuthController::class, 'customerLogin']);
+Route::post('customer/login', [CustomerAuthController::class, 'customerLogin2']);
 Route::post('verify-otp', [CustomerAuthController::class, 'verifyOtp']);
 
 // Rutas protegidas para clientes
@@ -97,6 +97,10 @@ Route::middleware('auth:customer')->group(function () {
 
     //Obtener los Devices en la App ligados al customer
     Route::get('devices/customer/{Id}', [DeviceController::class, 'getDevicesByCustomer']);
+
+    //Obtener dispositivos cercanos
+    Route::get('devices/nearby/{imei}', [DeviceController::class, 'getNearbyDevices']);
+
 
 });
 
