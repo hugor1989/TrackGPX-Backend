@@ -718,13 +718,11 @@ class DeviceController extends Controller
         ];
     }
 
-   /*  public function getNearbyDevices($imei, Request $request)
+    public function getNearbyDevices($imei, Request $request)
     {
-        $radius = $request->query('radius', 2); // kilómetros (por defecto 2 km)
+        $radius = $request->query('radius', 2); // kilómetros
 
-        // 1️⃣ Buscar el dispositivo base (default)
         $mainDevice = Device::where('imei', $imei)->first();
-
         if (!$mainDevice) {
             return response()->json([
                 'success' => false,
@@ -732,7 +730,6 @@ class DeviceController extends Controller
             ], 404);
         }
 
-        // 2️⃣ Obtener última ubicación del GPS principal
         $mainLocation = Location::where('device_id', $mainDevice->id)
             ->latest('created_at')
             ->first();
@@ -747,23 +744,31 @@ class DeviceController extends Controller
         $lat = $mainLocation->latitude;
         $lon = $mainLocation->longitude;
 
-        // 3️⃣ Buscar los demás dispositivos del mismo cliente
+        // 🔍 Dispositivos cercanos
         $nearbyDevices = Device::where('customer_id', $mainDevice->customer_id)
             ->where('imei', '!=', $imei)
-            ->join('locations', 'devices.id', '=', 'locations.device_id')
-            ->select(
-                'devices.id',
-                'devices.imei',
-                'locations.lat',
-                'locations.lon',
-                DB::raw("(
-                    6371 * acos(
-                        cos(radians($lat)) * cos(radians(locations.lat)) *
-                        cos(radians(locations.lon) - radians($lon)) +
-                        sin(radians($lat)) * sin(radians(locations.lat))
-                    )
-                ) AS distance")
+            ->select('devices.id', 'devices.imei')
+            ->selectSub(function ($query) {
+                $query->from('locations')
+                    ->select('latitude')
+                    ->whereColumn('locations.device_id', 'devices.id')
+                    ->latest('created_at')
+                    ->limit(1);
+            }, 'latitude')
+            ->selectSub(function ($query) {
+                $query->from('locations')
+                    ->select('longitude')
+                    ->whereColumn('locations.device_id', 'devices.id')
+                    ->latest('created_at')
+                    ->limit(1);
+            }, 'longitude')
+            ->selectRaw("(
+            6371 * acos(
+                cos(radians(?)) * cos(radians(latitude)) *
+                cos(radians(longitude) - radians(?)) +
+                sin(radians(?)) * sin(radians(latitude))
             )
+        ) AS distance", [$lat, $lon, $lat])
             ->having('distance', '<=', $radius)
             ->orderBy('distance', 'asc')
             ->get();
@@ -777,8 +782,15 @@ class DeviceController extends Controller
                     'lat' => $lat,
                     'lon' => $lon
                 ],
-                'nearby_devices' => $nearbyDevices
+                'nearby_devices' => $nearbyDevices->map(function ($device) {
+                    return [
+                        'imei' => $device->imei,
+                        'lat' => (float) $device->latitude,
+                        'lon' => (float) $device->longitude,
+                        'distance_km' => round($device->distance, 2)
+                    ];
+                })
             ]
         ]);
-    } */
+    }
 }
