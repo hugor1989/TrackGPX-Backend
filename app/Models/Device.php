@@ -19,6 +19,7 @@ class Device extends Model
         'manufacturer',
         'model',
         'config_parameters',
+        'sim_card_id', // ← AGREGAR ESTA LÍNEA
         'activated_at'
     ];
 
@@ -34,9 +35,10 @@ class Device extends Model
         return $this->belongsTo(Vehicle::class);
     }
 
+    // Y agrega esta función al final de la clase:
     public function simCard()
     {
-        return $this->hasOne(SimCard::class);
+        return $this->belongsTo(SimCard::class, 'sim_card_id');
     }
 
     public function locations()

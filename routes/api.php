@@ -11,6 +11,7 @@ use App\Http\Controllers\WebhookController;
 use App\Http\Controllers\CardController;
 use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\LocationController;
+use App\Http\Controllers\SimCardController;
 
 
 
@@ -56,9 +57,19 @@ Route::middleware('auth:user')->group(function () {
     Route::get('devices/statistics', [DeviceController::class, 'statistics']);
     Route::post('devices/import', [DeviceController::class, 'import']);
     Route::get('devices/get-by-id/{id}', [DeviceController::class, 'getDevicebyId']);
-    Route::put('devices/update-data-byId{id}', [DeviceController::class, 'updateDevice']);
+    Route::put('devices/update-data-by-Id/{id}', [DeviceController::class, 'updateDevice']);
     Route::delete('devices/delete-byId{id}', [DeviceController::class, 'deletebyId']);
     Route::post('devices/generate-activation-code/{id}', [DeviceController::class, 'generateActivationCodeDevice']);
+
+    //Sim Cards
+    Route::get('sim-cards/getAll-simCards', [SimCardController::class, 'getAllSimCard']);
+    Route::get('sim-cards/get-by-id/{id}', [SimCardController::class, 'Get_Simcard_ById']);
+    Route::post('sim-cards/create-cardsim', [SimCardController::class, 'create_SimCard']);
+    Route::put('sim-cards/update-date/{id}', [SimCardController::class, 'updateSimCard']);
+    Route::delete('sim-cards/delete-by-id/{id}', [SimCardController::class, 'destroy']);
+    Route::post('sim-cards/import-provider', [SimCardController::class, 'importFromProvider']);
+    Route::get('sim-cards/available', [SimCardController::class, 'getAvailableSims']);
+
 });
 
 #endregion
