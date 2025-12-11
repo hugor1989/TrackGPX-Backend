@@ -13,17 +13,22 @@ use App\Mail\VerificationCodeMail;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use App\Services\OpenPayService;
+use App\Services\APICrmWhatSapp;
 
 
 class CustomerAuthController extends AppBaseController
 {
 
     protected $openPayService;
-
+    //CRM WhatsApp
+    protected $whatapiService;
     // Inyectar el servicio en el constructor
-    public function __construct(OpenPayService $openPayService)
+    public function __construct(OpenPayService $openPayService,
+                                APICrmWhatSapp $whatapiService,)
     {
         $this->openPayService = $openPayService;
+        $this->whatapiService = $whatapiService;
+
     }
     public function customerRegister(Request $request)
     {
@@ -52,11 +57,16 @@ class CustomerAuthController extends AppBaseController
         $verificationCode = $this->generateVerificationCode($customer);
 
         // Enviar email con el código
-        $this->sendVerificationEmail($customer, $verificationCode->code);
+        // Enviar el código por WhatsApp (simulado)
+        $message = "You code OTP is: " . $verificationCode->code;
+        $resultWhatsApp = $this->whatapiService->sendMessage($request->phone, $message);
+        
+        //$this->sendVerificationEmail($customer, $verificationCode->code);
 
         return $this->respond(true, null, [
             'customer' => $customer,
             'verification_code_id' => $verificationCode->id,
+            'result' => $resultWhatsApp,
             'message' => 'Revisa tu email para el código de verificación'
         ], 'Cliente registrado correctamente. Se ha enviado un código de verificación a su email.', 201);
     }
@@ -209,8 +219,7 @@ class CustomerAuthController extends AppBaseController
        // return $this->respond(true, $token, $customer, 'Login de cliente correcto');
 
         return $this->respond(true, $token, [
-            'hola' => 1,
-            'customer' => $customer,
+           'customer' => $customer,
         ], 'Login de cliente correcto', 200);
     }
 

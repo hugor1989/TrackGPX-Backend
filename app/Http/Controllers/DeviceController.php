@@ -226,6 +226,7 @@ class DeviceController extends Controller
             'protocol' => 'nullable|string|max:50',
             'status' => 'sometimes|in:active,inactive,disconnected,pending',
             'vehicle_id' => 'nullable|exists:vehicles,id',
+            'sim_card_id' => 'nullable|exists:sim_cards,id', // ← AGREGAR ESTA LÍNEA
             'config_parameters' => 'nullable|json'
         ]);
 
@@ -248,6 +249,7 @@ class DeviceController extends Controller
                 'protocol',
                 'status',
                 'vehicle_id',
+                'sim_card_id',
                 'config_parameters'
             ]));
 
