@@ -30,46 +30,80 @@ class CustomerAuthController extends AppBaseController
         $this->whatapiService = $whatapiService;
 
     }
+
     public function customerRegister(Request $request)
     {
-        $request->validate([
-            'name'     => 'required|string|max:255',
-            'email'    => 'required|string|email|max:255',
-            'phone'    => 'nullable|string|max:20',
-            'password' => 'required|string|min:6|confirmed',
-        ]);
+        Log::info('📥 Iniciando registro de cliente', ['data' => $request->all()]);
 
-        // Verificación adicional por si acaso
+        try {
+            $request->validate([
+                'name'     => 'required|string|max:255',
+                'email'    => 'required|string|email|max:255',
+                'phone'    => 'nullable|string|max:20',
+                'password' => 'required|string|min:6|confirmed',
+            ]);
+            Log::info('✔ Validación correcta');
+        } catch (\Exception $e) {
+            Log::error('❌ Error en validación', ['error' => $e->getMessage()]);
+            return $this->respond(false, null, null, $e->getMessage(), 422);
+        }
+
+        // Verificar email repetido
         if (Customer::where('email', $request->email)->exists()) {
+            Log::warning('⚠ Email ya registrado', ['email' => $request->email]);
             return $this->respond(false, null, null, 'El email ya está registrado', 409);
         }
 
-        // Crear el cliente con estado "pending"
-        $customer = Customer::create([
-            'name'     => $request->name,
-            'email'    => $request->email,
-            'phone'    => $request->phone,
-            'password' => Hash::make($request->password),
-            'status'   => 'pending', // Cambiado a pending hasta verificación
-        ]);
+        try {
+            $customer = Customer::create([
+                'name'     => $request->name,
+                'email'    => $request->email,
+                'phone'    => $request->phone,
+                'password' => Hash::make($request->password),
+                'status'   => 'pending',
+            ]);
+            Log::info('✔ Cliente creado', ['customer_id' => $customer->id]);
+        } catch (\Exception $e) {
+            Log::error('❌ Error creando cliente', ['error' => $e->getMessage()]);
+            return $this->respond(false, null, null, 'No se pudo crear el cliente', 500);
+        }
 
-        // Generar y guardar código OTP
-        $verificationCode = $this->generateVerificationCode($customer);
+        // Código OTP
+        try {
+            $verificationCode = $this->generateVerificationCode($customer);
+            Log::info('✔ Código OTP generado', [
+                'customer_id' => $customer->id,
+                'otp_id' => $verificationCode->id,
+                'otp_code' => $verificationCode->code
+            ]);
+        } catch (\Exception $e) {
+            Log::error('❌ Error generando código OTP', ['error' => $e->getMessage()]);
+            return $this->respond(false, null, null, 'No se pudo generar el código OTP', 500);
+        }
 
-        // Enviar email con el código
-        // Enviar el código por WhatsApp (simulado)
-        $message = "You code OTP is: " . $verificationCode->code;
-        $resultWhatsApp = $this->whatapiService->sendMessage($request->phone, $message);
-        
-        //$this->sendVerificationEmail($customer, $verificationCode->code);
+        // Enviar WhatsApp
+        try {
+            Log::info('📤 Enviando WhatsApp', [
+                'phone' => $request->phone,
+                'message' => "You code OTP is: " . $verificationCode->code
+            ]);
+
+            $message = "You code OTP is: " . $verificationCode->code;
+            $resultWhatsApp = $this->whatapiService->sendMessage($request->phone, $message);
+
+            Log::info('📬 Resultado WhatsApp', ['response' => $resultWhatsApp]);
+        } catch (\Exception $e) {
+            Log::error('❌ Error enviando WhatsApp', ['error' => $e->getMessage()]);
+            $resultWhatsApp = null;
+        }
 
         return $this->respond(true, null, [
             'customer' => $customer,
             'verification_code_id' => $verificationCode->id,
-            'result' => $resultWhatsApp,
-            'message' => 'Revisa tu email para el código de verificación'
-        ], 'Cliente registrado correctamente. Se ha enviado un código de verificación a su email.', 201);
+            'result' => $resultWhatsApp
+        ], 'Cliente registrado correctamente. Se ha enviado un código de verificación.', 201);
     }
+
 
     /**
      * Genera un código de verificación único
