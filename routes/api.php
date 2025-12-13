@@ -12,7 +12,7 @@ use App\Http\Controllers\CardController;
 use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\SimCardController;
-
+use App\Http\Controllers\DeviceConfigurationController;    
 
 
 
@@ -111,6 +111,11 @@ Route::middleware('auth:customer')->group(function () {
 
     //Obtener dispositivos cercanos
     Route::get('devices/nearby/{imei}', [DeviceController::class, 'getNearbyDevices']);
+
+    //Device Configuration
+    Route::get('devices-get/{device}/configuration', [DeviceConfigurationController::class, 'show']);
+    Route::put('devices-update/{device}/configuration', [DeviceConfigurationController::class, 'update']);
+    Route::post('devices-upload/{device}/configuration/image', [DeviceConfigurationController::class, 'uploadImage']);
 
 
 });
