@@ -7,10 +7,10 @@ use Illuminate\Database\Eloquent\Model;
 class Device extends Model
 {
     protected $fillable = [
-        'vehicle_id', 
-        'imei', 
-        'protocol', 
-        'status', 
+        'vehicle_id',
+        'imei',
+        'protocol',
+        'status',
         'last_connection',
         'customer_id',
         // Nuevos campos agregados por la migración
@@ -72,6 +72,18 @@ class Device extends Model
     public function user()
     {
         return $this->hasOneThrough(Customer::class, Vehicle::class);
+    }
+
+    // app/Models/Device.php
+    public function configuration()
+    {
+        return $this->hasOne(DeviceConfiguration::class);
+    }
+
+    // Accessor para obtener nombre personalizado o default
+    public function getDisplayNameAttribute()
+    {
+        return $this->configuration?->custom_name ?? $this->vehicle_name ?? 'Dispositivo GPS';
     }
 
     // Scopes para filtros comunes
@@ -162,7 +174,7 @@ class Device extends Model
     {
         $this->activation_code = strtoupper(substr(md5(uniqid()), 0, 6));
         $this->save();
-        
+
         return $this->activation_code;
     }
 
@@ -190,7 +202,7 @@ class Device extends Model
         if (is_array($value)) {
             return $value;
         }
-        
+
         return json_decode($value, true) ?? [
             'heartbeat_interval' => 60,
             'gps_interval' => 30,
@@ -202,8 +214,8 @@ class Device extends Model
 
     public function setConfigParametersAttribute($value)
     {
-        $this->attributes['config_parameters'] = is_array($value) 
-            ? json_encode($value) 
+        $this->attributes['config_parameters'] = is_array($value)
+            ? json_encode($value)
             : $value;
     }
 

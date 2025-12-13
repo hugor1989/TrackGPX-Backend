@@ -498,7 +498,7 @@ class DeviceController extends Controller
     public function activateFromApp(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'serial_number' => 'required|string|max:255',
+            'imei' => 'required|string|max:255',
             'activation_code' => 'required|string|size:6',
             'user_id' => 'required|exists:customers,id',
         ]);
@@ -515,7 +515,7 @@ class DeviceController extends Controller
             DB::beginTransaction();
 
             // Buscar dispositivo pendiente por serial_number
-            $device = Device::where('serial_number', $request->serial_number)
+            $device = Device::where('imei', $request->imei)
                 ->where('activation_code', $request->activation_code)
                 ->where('status', 'pending')
                 ->first();
