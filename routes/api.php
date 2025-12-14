@@ -13,8 +13,8 @@ use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\SimCardController;
 use App\Http\Controllers\DeviceConfigurationController;    
-
-
+use App\Http\Controllers\GeofenceController;
+use App\Http\Controllers\RouteController;
 
 Route::options('{any}', function () {
     return response()->json([], 204);
@@ -118,6 +118,25 @@ Route::middleware('auth:customer')->group(function () {
     Route::post('devices-upload/{device}/configuration/image', [DeviceConfigurationController::class, 'uploadImage']);
 
 
+    // 🔔 Configuración de alarmas
+    Route::post('devices/{id}/alarms', [DeviceController::class, 'updateAlarms']);
+    Route::get('devices/{id}/alarms', [DeviceController::class, 'getAlarms']);
+    
+    // 📤 Comandos al dispositivo
+    Route::post('devices/{id}/commands', [DeviceController::class, 'sendCommand']);
+    Route::get('devices/{id}/commands', [DeviceController::class, 'getCommands']);
+
+    // Geocercas
+    Route::get('devices/{deviceId}/geofences', [GeofenceController::class, 'index']);
+    Route::post('devices/{deviceId}/geofences', [GeofenceController::class, 'store']);
+    Route::put('geofences/{id}', [GeofenceController::class, 'update']);
+    Route::delete('geofences/{id}', [GeofenceController::class, 'destroy']);
+    Route::post('devices/{deviceId}/check-geofences', [GeofenceController::class, 'checkGeofences']);
+
+    Route::get('routes/summary', [RouteController::class, 'getRoutesSummary']);
+    Route::get('routes/available', [RouteController::class, 'getDeviceRoutes']);
+    Route::get('route', [RouteController::class, 'getRouteByDate']);
+    Route::post('route/export', [RouteController::class, 'exportRoute']);
 });
 
 #endregion

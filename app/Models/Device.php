@@ -3,6 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Device extends Model
 {
@@ -62,6 +65,23 @@ class Device extends Model
     }
 
     /**
+     * Relación con alarmas
+     */
+    public function alarms(): HasOne
+    {
+        return $this->hasOne(DeviceAlarm::class);
+    }
+
+    /**
+     * Relación con comandos
+     */
+    public function commands(): HasMany
+    {
+        return $this->hasMany(DeviceCommand::class);
+    }
+
+
+    /**
      * Relación con el cliente (usuario)
      */
     public function customer()
@@ -115,6 +135,11 @@ class Device extends Model
     public function scopeWithoutVehicle($query)
     {
         return $query->whereNull('vehicle_id');
+    }
+
+    public function geofences(): HasMany
+    {
+        return $this->hasMany(Geofence::class);
     }
 
     // Métodos de negocio

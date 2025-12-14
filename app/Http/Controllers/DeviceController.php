@@ -8,6 +8,8 @@ use App\Models\Vehicle;
 use App\Models\SimCard;
 use App\Models\DeviceLog;
 use App\Models\Location;
+use Carbon\Carbon;
+use App\Models\DeviceAlarm;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -794,5 +796,347 @@ class DeviceController extends Controller
                 })
             ]
         ]);
+    }
+
+    /**
+     * 📊 Obtener historial de rutas del dispositivo
+     * GET /api/devices/{id}/routes?from=YYYY-MM-DD&to=YYYY-MM-DD
+     */
+    public function getRoutes(Request $request, $id)
+    {
+        try {
+            $device = Device::findOrFail($id);
+            
+            // Validar parámetros
+            $validator = Validator::make($request->all(), [
+                'from' => 'required|date',
+                'to' => 'required|date|after_or_equal:from',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Fechas inválidas',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $from = Carbon::parse($request->from)->startOfDay();
+            $to = Carbon::parse($request->to)->endOfDay();
+
+            // Obtener ubicaciones del rango de fechas
+            $locations = Location::where('device_id', $device->id)
+                ->whereBetween('timestamp', [$from, $to])
+                ->orderBy('timestamp', 'asc')
+                ->get();
+
+            if ($locations->isEmpty()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No hay datos de ruta para el período seleccionado',
+                    'route' => [
+                        'distance' => 0,
+                        'duration' => 0,
+                        'avgSpeed' => 0,
+                        'points' => [],
+                        'startTime' => null,
+                        'endTime' => null,
+                    ]
+                ]);
+            }
+
+            // Calcular estadísticas
+            $totalDistance = 0;
+            $speeds = [];
+            $points = [];
+
+            foreach ($locations as $index => $location) {
+                $points[] = [
+                    'lat' => (float) $location->latitude,
+                    'lon' => (float) $location->longitude,
+                    'speed' => (float) $location->speed,
+                    'timestamp' => $location->timestamp->toIso8601String(),
+                ];
+
+                $speeds[] = (float) $location->speed;
+
+                // Calcular distancia entre puntos consecutivos
+                if ($index > 0) {
+                    $prevLocation = $locations[$index - 1];
+                    $distance = $this->calculateDistance(
+                        $prevLocation->latitude,
+                        $prevLocation->longitude,
+                        $location->latitude,
+                        $location->longitude
+                    );
+                    $totalDistance += $distance;
+                }
+            }
+
+            // Calcular duración total en minutos
+            $firstTimestamp = Carbon::parse($locations->first()->timestamp);
+            $lastTimestamp = Carbon::parse($locations->last()->timestamp);
+            $totalDuration = $lastTimestamp->diffInMinutes($firstTimestamp);
+
+            // Calcular velocidad promedio
+            $avgSpeed = count($speeds) > 0 ? array_sum($speeds) / count($speeds) : 0;
+
+            return response()->json([
+                'success' => true,
+                'route' => [
+                    'distance' => round($totalDistance, 2),
+                    'duration' => $totalDuration,
+                    'avgSpeed' => round($avgSpeed, 1),
+                    'points' => $points,
+                    'totalPoints' => count($points),
+                    'startTime' => $firstTimestamp->toIso8601String(),
+                    'endTime' => $lastTimestamp->toIso8601String(),
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener rutas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 🔧 Guardar configuración de ajustes
+     * POST /api/devices/{id}/settings
+     */
+    public function updateSettings(Request $request, $id)
+    {
+        try {
+            $device = Device::findOrFail($id);
+
+            $validator = Validator::make($request->all(), [
+                'deviceName' => 'required|string|max:255',
+                'selectedColor' => 'required|string|regex:/^#[0-9A-Fa-f]{6}$/',
+                'routeAdjustment' => 'required|in:Coche,Moto,Camión,Bicicleta,A pie',
+                'trackingMode' => 'required|boolean',
+                'isSharing' => 'required|boolean',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos inválidos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            // Mapear tipo de ruta al formato de la BD
+            $routeTypeMap = [
+                'Coche' => 'car',
+                'Moto' => 'motorcycle',
+                'Camión' => 'truck',
+                'Bicicleta' => 'bicycle',
+                'A pie' => 'walking',
+            ];
+
+            // Actualizar configuración
+            $device->configuration()->updateOrCreate(
+                ['device_id' => $device->id],
+                [
+                    'custom_name' => $request->deviceName,
+                    'color' => $request->selectedColor,
+                    'route_type' => $routeTypeMap[$request->routeAdjustment] ?? 'car',
+                    'tracking_disabled' => !$request->trackingMode,
+                    'sharing_enabled' => $request->isSharing,
+                    'updated_at' => now(),
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Configuración actualizada correctamente',
+                'device' => $device->load('configuration')
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al actualizar configuración: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 🔔 Guardar configuración de alarmas
+     * POST /api/devices/{id}/alarms
+     */
+    public function updateAlarms(Request $request, $id)
+    {
+        try {
+            $device = Device::findOrFail($id);
+
+            $validator = Validator::make($request->all(), [
+                'alarmRetiro' => 'required|boolean',
+                'bateriaBaja' => 'required|boolean',
+                'vibracion' => 'required|boolean',
+                'alarmVelocidad' => 'required|boolean',
+                'velocidadLimite' => 'required_if:alarmVelocidad,true|integer|min:1|max:300',
+                'alarmGeocerca' => 'required|boolean',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos inválidos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            // Actualizar o crear alarmas
+            $alarmConfig = [
+                'alarm_removal' => $request->alarmRetiro,
+                'alarm_low_battery' => $request->bateriaBaja,
+                'alarm_vibration' => $request->vibracion,
+                'alarm_speed' => $request->alarmVelocidad,
+                'speed_limit' => $request->alarmVelocidad ? $request->velocidadLimite : null,
+                'alarm_geofence' => $request->alarmGeocerca,
+            ];
+
+            DeviceAlarm::updateOrCreate(
+                ['device_id' => $device->id],
+                $alarmConfig
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Alarmas configuradas correctamente',
+                'alarms' => $alarmConfig
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al configurar alarmas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 📋 Obtener configuración de alarmas
+     * GET /api/devices/{id}/alarms
+     */
+    public function getAlarms($id)
+    {
+        try {
+            $device = Device::with('alarms')->findOrFail($id);
+
+            if (!$device->alarms) {
+                // Crear configuración por defecto
+                $device->getOrCreateAlarms();
+            }
+
+            return response()->json([
+                'success' => true,
+                'alarms' => $device->alarms
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener alarmas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 📤 Enviar comando al dispositivo
+     * POST /api/devices/{id}/commands
+     */
+    /* public function sendCommand(Request $request, $id)
+    {
+        try {
+            $device = Device::findOrFail($id);
+
+            $validator = Validator::make($request->all(), [
+                'command' => 'required|string|in:locate,restart,lock,unlock,sos',
+                'parameters' => 'nullable|array',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Comando inválido',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            // Guardar comando en base de datos
+            $deviceCommand = DeviceCommand::create([
+                'device_id' => $device->id,
+                'command' => $request->command,
+                'parameters' => $request->parameters,
+                'status' => 'pending',
+                'sent_at' => now(),
+            ]);
+
+            // TODO: Enviar comando real al dispositivo GPS
+            // Esto dependerá de tu protocolo de comunicación
+            // (Socket.IO, MQTT, HTTP, etc.)
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Comando enviado correctamente',
+                'command' => $deviceCommand
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al enviar comando: ' . $e->getMessage()
+            ], 500);
+        }
+    } */
+
+    /**
+     * 📋 Obtener historial de comandos
+     * GET /api/devices/{id}/commands
+     */
+/*     public function getCommands($id)
+    {
+        try {
+            $device = Device::findOrFail($id);
+
+            $commands = DeviceCommand::where('device_id', $device->id)
+                ->orderBy('sent_at', 'desc')
+                ->take(20)
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'commands' => $commands
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener comandos: ' . $e->getMessage()
+            ], 500);
+        }
+    } */
+
+    /**
+     * 📏 Calcular distancia entre dos puntos (Haversine formula)
+     */
+    private function calculateDistance($lat1, $lon1, $lat2, $lon2)
+    {
+        $earthRadius = 6371; // Radio de la Tierra en km
+
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lon2 - $lon1);
+
+        $a = sin($dLat / 2) * sin($dLat / 2) +
+             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+             sin($dLon / 2) * sin($dLon / 2);
+
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
+        return $earthRadius * $c;
     }
 }
