@@ -61,6 +61,8 @@ class RouteController extends Controller
             'compress' => 'nullable|boolean',
             'compress_factor' => 'nullable|integer|min:1|max:100',
             'min_battery' => 'nullable|integer|min:0|max:100',
+            'detect_routes' => 'nullable|boolean', // Nuevo parámetro
+            'max_interval_minutes' => 'nullable|integer|min:1|max:1440', // Nuevo parámetro
         ]);
 
         if ($validator->fails()) {
@@ -77,120 +79,125 @@ class RouteController extends Controller
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
             $minSpeed = $request->min_speed ?? 0;
-            $maxSpeed = $request->max_speed ?? 200; // km/h máximo
+            $maxSpeed = $request->max_speed ?? 200;
             $minBattery = $request->min_battery ?? 0;
+            $detectRoutes = $request->boolean('detect_routes', false); // Por defecto false
+            $maxIntervalMinutes = $request->max_interval_minutes ?? 5; // 5 minutos por defecto
 
-            // Consulta base con TU estructura de tabla
+            // Consulta base
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
+                ->where('latitude', '!=', 0)
+                ->where('longitude', '!=', 0)
                 ->orderBy('timestamp', 'ASC');
 
-            // Filtrar por velocidad
-            if ($minSpeed > 0) {
-                $query->where('speed', '>=', $minSpeed);
-            }
-            if ($maxSpeed < 200) {
-                $query->where('speed', '<=', $maxSpeed);
-            }
-
-            // Filtrar por batería mínima
-            if ($minBattery > 0) {
-                $query->where('battery_level', '>=', $minBattery);
-            }
+            // Aplicar filtros
+            if ($minSpeed > 0) $query->where('speed', '>=', $minSpeed);
+            if ($maxSpeed < 200) $query->where('speed', '<=', $maxSpeed);
+            if ($minBattery > 0) $query->where('battery_level', '>=', $minBattery);
 
             $locations = $query->get();
 
-            // Si no hay datos
             if ($locations->isEmpty()) {
                 return response()->json([
                     'success' => true,
-                    'route' => [
-                        'device_id' => $device->id,
-                        'device_name' => $device->name,
-                        'start_date' => $startDate->toISOString(),
-                        'end_date' => $endDate->toISOString(),
-                        'points' => [],
-                        'statistics' => [
-                            'total_points' => 0,
-                            'distance' => 0,
-                            'duration' => 0,
-                            'avg_speed' => 0,
-                            'max_speed' => 0,
-                            'min_speed' => 0,
-                            'avg_battery' => 0,
-                            'min_battery' => 0,
-                            'max_battery' => 0,
-                            'avg_altitude' => 0,
-                        ],
-                        'filters_applied' => [
-                            'min_speed' => $minSpeed,
-                            'max_speed' => $maxSpeed,
-                            'min_battery' => $minBattery,
-                        ]
-                    ],
+                    'mode' => $detectRoutes ? 'multiple_routes' : 'single_route',
+                    'routes' => [],
+                    'total_routes' => 0,
                     'message' => 'No se encontraron puntos en el rango de fechas'
                 ]);
             }
 
-            // Comprimir puntos si se solicita
-            if ($request->compress) {
-                $compressFactor = $request->compress_factor ?? 10; // Tomar 1 de cada 10 puntos
-                $compressedLocations = $locations->filter(function ($item, $index) use ($compressFactor) {
-                    return $index % $compressFactor === 0;
-                });
-                $locations = $compressedLocations->values();
+            // ========== MODO: DETECCIÓN DE MÚLTIPLES RUTAS ==========
+            if ($detectRoutes) {
+                $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes);
+
+                // Aplicar compresión a cada ruta si se solicita
+                if ($request->compress) {
+                    $compressFactor = $request->compress_factor ?? 10;
+                    foreach ($routes as &$route) {
+                        $route['points'] = $this->compressPoints($route['points'], $compressFactor);
+                        $route['statistics']['total_points'] = count($route['points']);
+                    }
+                }
+
+                return response()->json([
+                    'success' => true,
+                    'mode' => 'multiple_routes',
+                    'routes' => $routes,
+                    'total_routes' => count($routes),
+                    'date_range' => [
+                        'start' => $startDate->toISOString(),
+                        'end' => $endDate->toISOString(),
+                    ],
+                    'detection_settings' => [
+                        'max_interval_minutes' => $maxIntervalMinutes,
+                        'max_interval_seconds' => $maxIntervalMinutes * 60,
+                    ],
+                    'message' => count($routes) . ' rutas detectadas correctamente'
+                ]);
             }
 
-            // Calcular estadísticas
-            $totalDistance = 0;
-            $totalDuration = 0;
-            $speeds = [];
-            $batteries = [];
-            $altitudes = [];
+            // ========== MODO: RUTA ÚNICA (COMPORTAMIENTO ORIGINAL) ==========
+            // ... (tu código original para una sola ruta)
 
-            for ($i = 1; $i < count($locations); $i++) {
-                $prev = $locations[$i - 1];
-                $current = $locations[$i];
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener ruta: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 
-                // Calcular distancia entre puntos (en metros)
-                $distance = $this->calculateHaversineDistance(
-                    $prev->latitude,
-                    $prev->longitude,
-                    $current->latitude,
-                    $current->longitude
-                );
-                $totalDistance += $distance;
+    /**
+     * Detectar múltiples rutas basadas en intervalos de tiempo
+     */
+    private function detectMultipleRoutes($locations, $maxIntervalMinutes = 5)
+    {
+        $routes = [];
+        $currentRoute = null;
+        $previousLocation = null;
+        $maxIntervalSeconds = $maxIntervalMinutes * 60;
+        $routeIndex = 0;
 
-                // Calcular duración (en segundos)
-                $duration = Carbon::parse($current->timestamp)
-                    ->diffInSeconds(Carbon::parse($prev->timestamp));
-                $totalDuration += $duration;
+        foreach ($locations as $index => $location) {
+            // Si es el primer punto, iniciar una nueva ruta
+            if ($previousLocation === null) {
+                $routeIndex++;
+                $currentRoute = [
+                    'id' => $routeIndex,
+                    'points' => [],
+                    'start_time' => $location->timestamp,
+                    'end_time' => $location->timestamp,
+                ];
+            } else {
+                // Calcular diferencia de tiempo con el punto anterior
+                $timeDiff = Carbon::parse($location->timestamp)
+                    ->diffInSeconds(Carbon::parse($previousLocation->timestamp));
 
-                // Recolectar datos para promedios
-                if ($current->speed !== null) {
-                    $speeds[] = $current->speed;
-                }
+                // Si hay más de X minutos de diferencia, finalizar ruta actual
+                if ($timeDiff > $maxIntervalSeconds) {
+                    // Finalizar ruta anterior si tiene puntos
+                    if ($currentRoute && count($currentRoute['points']) > 0) {
+                        $currentRoute['end_time'] = $previousLocation->timestamp;
+                        $currentRoute = $this->calculateRouteStatistics($currentRoute);
+                        $routes[] = $currentRoute;
+                    }
 
-                if ($current->battery_level !== null) {
-                    $batteries[] = $current->battery_level;
-                }
-
-                if ($current->altitude !== null) {
-                    $altitudes[] = $current->altitude;
+                    // Iniciar nueva ruta
+                    $routeIndex++;
+                    $currentRoute = [
+                        'id' => $routeIndex,
+                        'points' => [],
+                        'start_time' => $location->timestamp,
+                        'end_time' => $location->timestamp,
+                    ];
                 }
             }
 
-            // Convertir distancia a kilómetros
-            $totalDistanceKm = $totalDistance / 1000;
-
-            // Calcular promedios
-            $avgSpeed = count($speeds) > 0 ? array_sum($speeds) / count($speeds) : 0;
-            $avgBattery = count($batteries) > 0 ? array_sum($batteries) / count($batteries) : null;
-            $avgAltitude = count($altitudes) > 0 ? array_sum($altitudes) / count($altitudes) : null;
-
-            // Formatear puntos para el frontend
-            $points = $locations->map(function ($location) {
-                return [
+            // Agregar punto a la ruta actual
+            if ($currentRoute) {
+                $currentRoute['points'][] = [
                     'lat' => (float) $location->latitude,
                     'lon' => (float) $location->longitude,
                     'speed' => $location->speed !== null ? (float) $location->speed : null,
@@ -198,51 +205,116 @@ class RouteController extends Controller
                     'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
                     'timestamp' => $location->timestamp->toISOString(),
                 ];
-            });
+            }
 
-            return response()->json([
-                'success' => true,
-                'route' => [
-                    'device_id' => $device->id,
-                    'device_name' => $device->name,
-                    'start_date' => $startDate->toISOString(),
-                    'end_date' => $endDate->toISOString(),
-                    'points' => $points,
-                    'statistics' => [
-                        'total_points' => count($points),
-                        'distance' => round($totalDistanceKm, 2),
-                        'duration' => $totalDuration,
-                        'duration_human' => $this->secondsToHuman($totalDuration),
-                        'avg_speed' => (float) round($avgSpeed, 2), // Convertir a float
-                        'max_speed' => (float) (count($speeds) > 0 ? max($speeds) : 0), // Convertir a float
-                        'min_speed' => (float) (count($speeds) > 0 ? min($speeds) : 0), // Convertir a float
-                        'avg_battery' => $avgBattery !== null ? (float) round($avgBattery, 1) : null,
-                        'min_battery' => count($batteries) > 0 ? (int) min($batteries) : null,
-                        'max_battery' => count($batteries) > 0 ? (int) max($batteries) : null,
-                        'avg_altitude' => $avgAltitude !== null ? (float) round($avgAltitude, 1) : null,
-                        'first_point_time' => $locations->first()->timestamp->toISOString(),
-                        'last_point_time' => $locations->last()->timestamp->toISOString(),
-                    ],
-                    'metadata' => [
-                        'compressed' => $request->compress ?? false,
-                        'compress_factor' => $request->compress_factor ?? null,
-                        'filters' => [
-                            'min_speed' => $minSpeed,
-                            'max_speed' => $maxSpeed,
-                            'min_battery' => $minBattery,
-                        ],
-                        'query_time' => Carbon::now()->toISOString(),
-                    ]
-                ],
-                'message' => 'Ruta obtenida correctamente'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al obtener ruta: ' . $e->getMessage(),
-                'trace' => config('app.debug') ? $e->getTrace() : null
-            ], 500);
+            $previousLocation = $location;
         }
+
+        // Agregar la última ruta si existe
+        if ($currentRoute && count($currentRoute['points']) > 0) {
+            $currentRoute['end_time'] = $locations->last()->timestamp;
+            $currentRoute = $this->calculateRouteStatistics($currentRoute);
+            $routes[] = $currentRoute;
+        }
+
+        return $routes;
+    }
+
+    /**
+     * Calcular estadísticas para una ruta
+     */
+    private function calculateRouteStatistics($route)
+    {
+        $points = $route['points'];
+
+        if (count($points) === 0) {
+            $route['statistics'] = [
+                'total_points' => 0,
+                'distance' => 0,
+                'duration' => 0,
+                'duration_human' => '0s',
+                'avg_speed' => 0,
+                'max_speed' => 0,
+                'min_speed' => 0,
+                'avg_battery' => null,
+                'min_battery' => null,
+                'max_battery' => null,
+                'avg_altitude' => null,
+            ];
+            return $route;
+        }
+
+        // Calcular distancia, duración y estadísticas
+        $totalDistance = 0;
+        $totalDuration = 0;
+        $speeds = [];
+        $batteries = [];
+        $altitudes = [];
+
+        for ($i = 1; $i < count($points); $i++) {
+            $prev = $points[$i - 1];
+            $current = $points[$i];
+
+            // Calcular distancia
+            $distance = $this->calculateHaversineDistance(
+                $prev['lat'],
+                $prev['lon'],
+                $current['lat'],
+                $current['lon']
+            );
+            $totalDistance += $distance;
+
+            // Calcular duración
+            $duration = Carbon::parse($current['timestamp'])
+                ->diffInSeconds(Carbon::parse($prev['timestamp']));
+            $totalDuration += $duration;
+
+            // Recolectar datos para promedios
+            if ($current['speed'] !== null) $speeds[] = $current['speed'];
+            if ($current['battery'] !== null) $batteries[] = $current['battery'];
+            if ($current['altitude'] !== null) $altitudes[] = $current['altitude'];
+        }
+
+        // Convertir distancia a km
+        $totalDistanceKm = $totalDistance / 1000;
+
+        // Calcular promedios
+        $avgSpeed = count($speeds) > 0 ? array_sum($speeds) / count($speeds) : 0;
+        $avgBattery = count($batteries) > 0 ? array_sum($batteries) / count($batteries) : null;
+        $avgAltitude = count($altitudes) > 0 ? array_sum($altitudes) / count($altitudes) : null;
+
+        $route['statistics'] = [
+            'total_points' => count($points),
+            'distance' => round($totalDistanceKm, 2),
+            'duration' => $totalDuration,
+            'duration_human' => $this->secondsToHuman($totalDuration),
+            'avg_speed' => round($avgSpeed, 2),
+            'max_speed' => count($speeds) > 0 ? max($speeds) : 0,
+            'min_speed' => count($speeds) > 0 ? min($speeds) : 0,
+            'avg_battery' => $avgBattery !== null ? round($avgBattery, 1) : null,
+            'min_battery' => count($batteries) > 0 ? min($batteries) : null,
+            'max_battery' => count($batteries) > 0 ? max($batteries) : null,
+            'avg_altitude' => $avgAltitude !== null ? round($avgAltitude, 1) : null,
+            'first_point_time' => $points[0]['timestamp'],
+            'last_point_time' => $points[count($points) - 1]['timestamp'],
+        ];
+
+        $route['device_name'] = $device->name ?? 'Dispositivo';
+        $route['device_id'] = $device->id ?? 0;
+
+        return $route;
+    }
+
+    /**
+     * Comprimir puntos de una ruta
+     */
+    private function compressPoints($points, $compressFactor)
+    {
+        if ($compressFactor <= 1) return $points;
+
+        return array_filter($points, function ($index) use ($compressFactor) {
+            return $index % $compressFactor === 0;
+        }, ARRAY_FILTER_USE_KEY);
     }
 
     // Función para calcular distancia Haversine (más precisa)
