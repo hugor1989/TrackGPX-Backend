@@ -210,16 +210,16 @@ class RouteController extends Controller
                     'points' => $points,
                     'statistics' => [
                         'total_points' => count($points),
-                        'distance' => round($totalDistanceKm, 2), // km
-                        'duration' => $totalDuration, // segundos
+                        'distance' => round($totalDistanceKm, 2),
+                        'duration' => $totalDuration,
                         'duration_human' => $this->secondsToHuman($totalDuration),
-                        'avg_speed' => round($avgSpeed, 2), // km/h
-                        'max_speed' => count($speeds) > 0 ? max($speeds) : 0,
-                        'min_speed' => count($speeds) > 0 ? min($speeds) : 0,
-                        'avg_battery' => $avgBattery !== null ? round($avgBattery, 1) : null,
-                        'min_battery' => count($batteries) > 0 ? min($batteries) : null,
-                        'max_battery' => count($batteries) > 0 ? max($batteries) : null,
-                        'avg_altitude' => $avgAltitude !== null ? round($avgAltitude, 1) : null,
+                        'avg_speed' => (float) round($avgSpeed, 2), // Convertir a float
+                        'max_speed' => (float) (count($speeds) > 0 ? max($speeds) : 0), // Convertir a float
+                        'min_speed' => (float) (count($speeds) > 0 ? min($speeds) : 0), // Convertir a float
+                        'avg_battery' => $avgBattery !== null ? (float) round($avgBattery, 1) : null,
+                        'min_battery' => count($batteries) > 0 ? (int) min($batteries) : null,
+                        'max_battery' => count($batteries) > 0 ? (int) max($batteries) : null,
+                        'avg_altitude' => $avgAltitude !== null ? (float) round($avgAltitude, 1) : null,
                         'first_point_time' => $locations->first()->timestamp->toISOString(),
                         'last_point_time' => $locations->last()->timestamp->toISOString(),
                     ],
