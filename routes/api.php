@@ -133,10 +133,21 @@ Route::middleware('auth:customer')->group(function () {
     Route::delete('geofences/{id}', [GeofenceController::class, 'destroy']);
     Route::post('devices/{deviceId}/check-geofences', [GeofenceController::class, 'checkGeofences']);
 
-    Route::get('routes/summary', [RouteController::class, 'getRoutesSummary']);
-    Route::get('routes/available', [RouteController::class, 'getDeviceRoutes']);
+     // 1. Rutas disponibles para un dispositivo
+    // GET: /api/devices/{deviceId}/routes/available
+    Route::get('devices/{deviceId}/routes/available', [RouteController::class, 'getDeviceRoutes']);
+    
+    // 2. Resumen de rutas por días  
+    // GET: /api/devices/{deviceId}/routes/summary
+    Route::get('devices/{deviceId}/routes/summary', [RouteController::class, 'getRoutesSummary']);
+    
+    // 3. Obtener ruta por fechas (CON parámetros GET)
+    // GET: /api/devices/{deviceId}/route?start_date=...&end_date=...
     Route::get('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
-    Route::post('route/export', [RouteController::class, 'exportRoute']);
+    
+    // 4. Exportar ruta
+    // POST: /api/devices/{deviceId}/route/export
+    Route::post('devices/{deviceId}/route/export', [RouteController::class, 'exportRoute']);
 });
 
 #endregion
