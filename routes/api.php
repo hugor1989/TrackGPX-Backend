@@ -135,7 +135,7 @@ Route::middleware('auth:customer')->group(function () {
 
     Route::get('routes/summary', [RouteController::class, 'getRoutesSummary']);
     Route::get('routes/available', [RouteController::class, 'getDeviceRoutes']);
-    Route::get('route', [RouteController::class, 'getRouteByDate']);
+    Route::get('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
     Route::post('route/export', [RouteController::class, 'exportRoute']);
 });
 
