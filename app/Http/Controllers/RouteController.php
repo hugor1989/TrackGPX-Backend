@@ -50,7 +50,7 @@ class RouteController extends Controller
         }
     }
 
-    // Obtener ruta por rango de fechas - ADAPTADO A TU ESTRUCTURA
+    // Obtener ruta por rango de fechas - CORREGIDO
     public function getRouteByDate(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
@@ -61,8 +61,8 @@ class RouteController extends Controller
             'compress' => 'nullable|boolean',
             'compress_factor' => 'nullable|integer|min:1|max:100',
             'min_battery' => 'nullable|integer|min:0|max:100',
-            'detect_routes' => 'nullable|boolean', // Nuevo parámetro
-            'max_interval_minutes' => 'nullable|integer|min:1|max:1440', // Nuevo parámetro
+            'detect_routes' => 'nullable|boolean',
+            'max_interval_minutes' => 'nullable|integer|min:1|max:1440',
         ]);
 
         if ($validator->fails()) {
@@ -81,8 +81,8 @@ class RouteController extends Controller
             $minSpeed = $request->min_speed ?? 0;
             $maxSpeed = $request->max_speed ?? 200;
             $minBattery = $request->min_battery ?? 0;
-            $detectRoutes = $request->boolean('detect_routes', false); // Por defecto false
-            $maxIntervalMinutes = $request->max_interval_minutes ?? 5; // 5 minutos por defecto
+            $detectRoutes = $request->boolean('detect_routes', false);
+            $maxIntervalMinutes = $request->max_interval_minutes ?? 5;
 
             // Consulta base
             $query = Location::where('device_id', $device->id)
@@ -103,6 +103,7 @@ class RouteController extends Controller
                     'success' => true,
                     'mode' => $detectRoutes ? 'multiple_routes' : 'single_route',
                     'routes' => [],
+                    'route' => null,
                     'total_routes' => 0,
                     'message' => 'No se encontraron puntos en el rango de fechas'
                 ]);
@@ -110,7 +111,7 @@ class RouteController extends Controller
 
             // ========== MODO: DETECCIÓN DE MÚLTIPLES RUTAS ==========
             if ($detectRoutes) {
-                $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes);
+                $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes, $device);
 
                 // Aplicar compresión a cada ruta si se solicita
                 if ($request->compress) {
@@ -138,9 +139,40 @@ class RouteController extends Controller
                 ]);
             }
 
-            // ========== MODO: RUTA ÚNICA (COMPORTAMIENTO ORIGINAL) ==========
-            // ... (tu código original para una sola ruta)
+            // ========== MODO: RUTA ÚNICA ==========
+            $route = $this->createSingleRoute($locations, $device);
 
+            // Aplicar compresión si se solicita
+            if ($request->compress) {
+                $compressFactor = $request->compress_factor ?? 10;
+                $route['points'] = $this->compressPoints($route['points'], $compressFactor);
+                $route['statistics']['total_points'] = count($route['points']);
+            }
+
+            // Reorganizar puntos como objeto con claves numéricas (manteniendo compatibilidad)
+            $reorganizedPoints = [];
+            foreach ($route['points'] as $index => $point) {
+                $reorganizedPoints[$index * 10] = $point; // Claves como 0, 10, 20, 30...
+            }
+
+            return response()->json([
+                'success' => true,
+                'mode' => 'single_route',
+                'route' => [
+                    'points' => $reorganizedPoints, // Objeto con claves numéricas
+                    'statistics' => $route['statistics'],
+                    'start_time' => $route['start_time'],
+                    'end_time' => $route['end_time'],
+                    'device_name' => $route['device_name'],
+                    'device_id' => $route['device_id'],
+                ],
+                'routes' => [],
+                'date_range' => [
+                    'start' => $startDate->toISOString(),
+                    'end' => $endDate->toISOString(),
+                ],
+                'message' => 'Ruta única generada correctamente'
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -150,9 +182,38 @@ class RouteController extends Controller
     }
 
     /**
+     * Crear una ruta única (modo original)
+     */
+    private function createSingleRoute($locations, $device)
+    {
+        $points = [];
+
+        foreach ($locations as $location) {
+            $points[] = [
+                'lat' => (float) $location->latitude,
+                'lon' => (float) $location->longitude,
+                'speed' => $location->speed !== null ? (float) $location->speed : null,
+                'altitude' => $location->altitude !== null ? (float) $location->altitude : null,
+                'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
+                'timestamp' => $location->timestamp->toISOString(),
+            ];
+        }
+
+        $route = [
+            'points' => $points,
+            'start_time' => $locations->first()->timestamp->toISOString(),
+            'end_time' => $locations->last()->timestamp->toISOString(),
+            'device_name' => $device->name,
+            'device_id' => $device->id,
+        ];
+
+        return $this->calculateRouteStatistics($route, $device);
+    }
+
+    /**
      * Detectar múltiples rutas basadas en intervalos de tiempo
      */
-    private function detectMultipleRoutes($locations, $maxIntervalMinutes = 5)
+    private function detectMultipleRoutes($locations, $maxIntervalMinutes = 5, $device = null)
     {
         $routes = [];
         $currentRoute = null;
@@ -180,7 +241,7 @@ class RouteController extends Controller
                     // Finalizar ruta anterior si tiene puntos
                     if ($currentRoute && count($currentRoute['points']) > 0) {
                         $currentRoute['end_time'] = $previousLocation->timestamp;
-                        $currentRoute = $this->calculateRouteStatistics($currentRoute);
+                        $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
                         $routes[] = $currentRoute;
                     }
 
@@ -213,8 +274,17 @@ class RouteController extends Controller
         // Agregar la última ruta si existe
         if ($currentRoute && count($currentRoute['points']) > 0) {
             $currentRoute['end_time'] = $locations->last()->timestamp;
-            $currentRoute = $this->calculateRouteStatistics($currentRoute);
+            $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
             $routes[] = $currentRoute;
+        }
+
+        // Reorganizar puntos como objeto con claves numéricas para cada ruta
+        foreach ($routes as &$route) {
+            $reorganizedPoints = [];
+            foreach ($route['points'] as $index => $point) {
+                $reorganizedPoints[$index * 10] = $point; // Claves como 0, 10, 20, 30...
+            }
+            $route['points'] = $reorganizedPoints;
         }
 
         return $routes;
@@ -223,7 +293,7 @@ class RouteController extends Controller
     /**
      * Calcular estadísticas para una ruta
      */
-    private function calculateRouteStatistics($route)
+    private function calculateRouteStatistics($route, $device = null)
     {
         $points = $route['points'];
 
@@ -299,8 +369,8 @@ class RouteController extends Controller
             'last_point_time' => $points[count($points) - 1]['timestamp'],
         ];
 
-        $route['device_name'] = $device->name ?? 'Dispositivo';
-        $route['device_id'] = $device->id ?? 0;
+        $route['device_name'] = $device ? $device->name : 'Dispositivo';
+        $route['device_id'] = $device ? $device->id : 0;
 
         return $route;
     }
