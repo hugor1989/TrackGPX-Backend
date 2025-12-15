@@ -17,7 +17,7 @@ class RouteController extends Controller
         try {
             $device = Device::findOrFail($deviceId);
 
-            // Obtener fechas con datos disponibles (últimos 30 días)
+            // Obtener fechas con datos disponibles (últimos 90 días)
             $dates = Location::where('device_id', $device->id)
                 ->where('timestamp', '>=', Carbon::now()->subDays(90))
                 ->selectRaw('DATE(timestamp) as date, COUNT(*) as points')
@@ -50,7 +50,7 @@ class RouteController extends Controller
         }
     }
 
-   
+
     public function getRouteByDate(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
@@ -84,7 +84,7 @@ class RouteController extends Controller
             $detectRoutes = $request->boolean('detect_routes', false);
             $maxIntervalMinutes = $request->max_interval_minutes ?? 5;
 
-            // 🔍 Consulta base con CORRECCIÓN de longitud
+            // Consulta base
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
@@ -98,8 +98,7 @@ class RouteController extends Controller
 
             $locations = $query->get();
 
-            // 🐛 DEBUG: Ver qué datos trae
-            \Log::info('📍 RouteController - Ubicaciones encontradas:', [
+            \Log::info('📍 Ubicaciones encontradas:', [
                 'count' => $locations->count(),
                 'first_location' => $locations->first() ? [
                     'lat' => $locations->first()->latitude,
@@ -123,10 +122,9 @@ class RouteController extends Controller
             if ($detectRoutes) {
                 $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes, $device);
 
-                // 🐛 DEBUG: Ver cuántas rutas se detectaron
                 \Log::info('🛣️ Rutas detectadas:', [
                     'total_routes' => count($routes),
-                    'routes_summary' => array_map(function($route) {
+                    'routes_summary' => array_map(function ($route) {
                         return [
                             'id' => $route['id'],
                             'points' => count($route['points']),
@@ -176,7 +174,7 @@ class RouteController extends Controller
                 'success' => true,
                 'mode' => 'single_route',
                 'route' => [
-                    'points' => $route['points'], // ✅ Array normal, sin reorganizar
+                    'points' => $route['points'],
                     'statistics' => $route['statistics'],
                     'start_time' => $route['start_time'],
                     'end_time' => $route['end_time'],
@@ -194,8 +192,9 @@ class RouteController extends Controller
             \Log::error('❌ Error en getRouteByDate:', [
                 'message' => $e->getMessage(),
                 'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
             ]);
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener ruta: ' . $e->getMessage()
@@ -211,9 +210,8 @@ class RouteController extends Controller
         $points = [];
 
         foreach ($locations as $location) {
-            // ✅ CORRECCIÓN: Asegurar que longitude sea negativa si está en México
             $longitude = (float) $location->longitude;
-            
+
             // Si la longitud es positiva pero debería ser negativa (México está en -90 a -120)
             if ($longitude > 0 && $longitude < 180) {
                 $longitude = -$longitude;
@@ -221,7 +219,7 @@ class RouteController extends Controller
 
             $points[] = [
                 'lat' => (float) $location->latitude,
-                'lon' => $longitude, // ✅ Longitud corregida
+                'lon' => $longitude,
                 'speed' => $location->speed !== null ? (float) $location->speed : null,
                 'altitude' => $location->altitude !== null ? (float) $location->altitude : null,
                 'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
@@ -241,18 +239,24 @@ class RouteController extends Controller
     }
 
     /**
-     * 🔥 Detectar múltiples rutas basadas en intervalos de tiempo - MEJORADO
+     * 🔥 Detectar múltiples rutas basadas en intervalos de tiempo - CORREGIDO
      */
     private function detectMultipleRoutes($locations, $maxIntervalMinutes = 5, $device = null)
     {
         $routes = [];
         $currentRoute = null;
-        $previousLocation = null;
+        $previousTimestamp = null;
         $maxIntervalSeconds = $maxIntervalMinutes * 60;
         $routeIndex = 0;
 
+        \Log::info('🔍 Iniciando detección de rutas', [
+            'total_locations' => $locations->count(),
+            'max_interval_minutes' => $maxIntervalMinutes,
+            'max_interval_seconds' => $maxIntervalSeconds
+        ]);
+
         foreach ($locations as $index => $location) {
-            // ✅ CORRECCIÓN: Asegurar que longitude sea negativa si está en México
+            // Corregir longitud
             $longitude = (float) $location->longitude;
             if ($longitude > 0 && $longitude < 180) {
                 $longitude = -$longitude;
@@ -267,8 +271,10 @@ class RouteController extends Controller
                 'timestamp' => $location->timestamp->toISOString(),
             ];
 
-            // Si es el primer punto, iniciar una nueva ruta
-            if ($previousLocation === null) {
+            $currentTimestamp = Carbon::parse($location->timestamp);
+
+            // Si es el primer punto, iniciar nueva ruta
+            if ($previousTimestamp === null) {
                 $routeIndex++;
                 $currentRoute = [
                     'id' => $routeIndex,
@@ -276,27 +282,39 @@ class RouteController extends Controller
                     'start_time' => $location->timestamp->toISOString(),
                     'end_time' => $location->timestamp->toISOString(),
                 ];
-                
-                \Log::info("🆕 Nueva ruta #{$routeIndex} iniciada");
+
+                \Log::info("🆕 Ruta #{$routeIndex} iniciada (primer punto)", [
+                    'timestamp' => $currentTimestamp->toISOString(),
+                    'index' => $index
+                ]);
             } else {
                 // Calcular diferencia de tiempo con el punto anterior
-                $timeDiff = Carbon::parse($location->timestamp)
-                    ->diffInSeconds(Carbon::parse($previousLocation->timestamp));
+                $timeDiff = $currentTimestamp->diffInSeconds($previousTimestamp);
 
-                \Log::info("⏱️ Diferencia de tiempo: {$timeDiff}s (máximo: {$maxIntervalSeconds}s)");
+                \Log::info("⏱️ Analizando punto #{$index}", [
+                    'current_time' => $currentTimestamp->toISOString(),
+                    'previous_time' => $previousTimestamp->toISOString(),
+                    'time_diff_seconds' => $timeDiff,
+                    'max_allowed_seconds' => $maxIntervalSeconds,
+                    'exceeds_limit' => $timeDiff > $maxIntervalSeconds
+                ]);
 
-                // Si hay más de X minutos de diferencia, finalizar ruta actual
+                // 🔥 CORRECCIÓN CRÍTICA: Si el intervalo excede el límite, finalizar ruta actual
                 if ($timeDiff > $maxIntervalSeconds) {
-                    // Finalizar ruta anterior si tiene puntos
+                    // Finalizar ruta anterior
                     if ($currentRoute && count($currentRoute['points']) > 0) {
-                        $currentRoute['end_time'] = $previousLocation->timestamp->toISOString();
                         $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
                         $routes[] = $currentRoute;
-                        
-                        \Log::info("✅ Ruta #{$currentRoute['id']} finalizada con " . count($currentRoute['points']) . " puntos");
+
+                        \Log::info("✅ Ruta #{$currentRoute['id']} finalizada", [
+                            'points' => count($currentRoute['points']),
+                            'start' => $currentRoute['start_time'],
+                            'end' => $currentRoute['end_time'],
+                            'reason' => "Intervalo de {$timeDiff}s excede límite de {$maxIntervalSeconds}s"
+                        ]);
                     }
 
-                    // Iniciar nueva ruta
+                    // Iniciar NUEVA ruta con el punto actual
                     $routeIndex++;
                     $currentRoute = [
                         'id' => $routeIndex,
@@ -304,25 +322,49 @@ class RouteController extends Controller
                         'start_time' => $location->timestamp->toISOString(),
                         'end_time' => $location->timestamp->toISOString(),
                     ];
-                    
-                    \Log::info("🆕 Nueva ruta #{$routeIndex} iniciada por intervalo");
+
+                    \Log::info("🆕 Ruta #{$routeIndex} iniciada (por intervalo)", [
+                        'timestamp' => $currentTimestamp->toISOString(),
+                        'previous_route_ended' => $previousTimestamp->toISOString(),
+                        'gap_seconds' => $timeDiff
+                    ]);
                 } else {
                     // Agregar punto a la ruta actual
                     $currentRoute['points'][] = $currentPoint;
                     $currentRoute['end_time'] = $location->timestamp->toISOString();
+
+                    \Log::info("➕ Punto agregado a ruta #{$currentRoute['id']}", [
+                        'total_points' => count($currentRoute['points']),
+                        'time_diff' => $timeDiff
+                    ]);
                 }
             }
 
-            $previousLocation = $location;
+            $previousTimestamp = $currentTimestamp;
         }
 
         // Agregar la última ruta si existe
         if ($currentRoute && count($currentRoute['points']) > 0) {
             $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
             $routes[] = $currentRoute;
-            
-            \Log::info("✅ Última ruta #{$currentRoute['id']} finalizada con " . count($currentRoute['points']) . " puntos");
+
+            \Log::info("✅ Última ruta #{$currentRoute['id']} finalizada", [
+                'points' => count($currentRoute['points']),
+                'start' => $currentRoute['start_time'],
+                'end' => $currentRoute['end_time']
+            ]);
         }
+
+        \Log::info('🏁 Detección completada', [
+            'total_routes' => count($routes),
+            'routes' => array_map(function ($r) {
+                return [
+                    'id' => $r['id'],
+                    'points' => count($r['points']),
+                    'duration' => $r['statistics']['duration_human']
+                ];
+            }, $routes)
+        ]);
 
         return $routes;
     }
@@ -423,12 +465,12 @@ class RouteController extends Controller
                 $compressed[] = $point;
             }
         }
-        
+
         // Siempre incluir el último punto
         if (end($compressed) !== end($points)) {
             $compressed[] = end($points);
         }
-        
+
         return $compressed;
     }
 
@@ -471,7 +513,7 @@ class RouteController extends Controller
 
         return implode(' ', $result);
     }
-    
+
 
     // Obtener resumen de rutas por día
     public function getRoutesSummary(Request $request, $deviceId)
@@ -479,7 +521,7 @@ class RouteController extends Controller
         try {
             $device = Device::findOrFail($deviceId);
 
-            $days = $request->days ?? 7; // Últimos 7 días por defecto
+            $days = $request->days ?? 7;
 
             $summary = Location::where('device_id', $device->id)
                 ->where('timestamp', '>=', Carbon::now()->subDays($days))
@@ -500,9 +542,6 @@ class RouteController extends Controller
                     $first = Carbon::parse($item->first_point);
                     $last = Carbon::parse($item->last_point);
                     $duration = $first->diffInSeconds($last);
-
-                    // Calcular distancia aproximada (basada en puntos consecutivos)
-                    // Nota: Para distancia real necesitarías cálculo punto por punto
 
                     return [
                         'date' => $item->date,
@@ -541,7 +580,7 @@ class RouteController extends Controller
         }
     }
 
-    // Exportar ruta a GPX/KML - ACTUALIZADO
+    // Exportar ruta a GPX/KML
     public function exportRoute(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
@@ -549,7 +588,7 @@ class RouteController extends Controller
             'end_date' => 'required|date|after_or_equal:start_date',
             'format' => 'required|in:gpx,kml,json',
             'include_metadata' => 'boolean',
-            'simplify' => 'boolean', // Simplificar ruta para reducir tamaño
+            'simplify' => 'boolean',
         ]);
 
         if ($validator->fails()) {
@@ -563,12 +602,11 @@ class RouteController extends Controller
         try {
             $device = Device::findOrFail($deviceId);
 
-            // Primero obtenemos la ruta
             $routeRequest = new Request([
                 'start_date' => $request->start_date,
                 'end_date' => $request->end_date,
                 'compress' => $request->simplify ?? true,
-                'compress_factor' => $request->simplify ? 5 : 1, // 1 de cada 5 puntos si se simplifica
+                'compress_factor' => $request->simplify ? 5 : 1,
             ]);
 
             $routeResponse = $this->getRouteByDate($routeRequest, $deviceId);
@@ -587,7 +625,6 @@ class RouteController extends Controller
                 ], 400);
             }
 
-            // Generar archivo según formato
             $filename = "ruta_" . str_slug($device->name) . "_" .
                 Carbon::parse($request->start_date)->format('Y-m-d') . "_" .
                 Carbon::parse($request->end_date)->format('Y-m-d');
@@ -601,7 +638,6 @@ class RouteController extends Controller
                 $filename .= '.kml';
                 $contentType = 'application/vnd.google-earth.kml+xml';
             } else {
-                // JSON format
                 $content = json_encode([
                     'metadata' => [
                         'device' => $device->name,
@@ -618,7 +654,6 @@ class RouteController extends Controller
                 $contentType = 'application/json';
             }
 
-            // Devolver como descarga
             return response($content, 200, [
                 'Content-Type' => $contentType,
                 'Content-Disposition' => 'attachment; filename="' . $filename . '"',
@@ -635,7 +670,7 @@ class RouteController extends Controller
     private function generateGPX($device, $route, $includeMetadata = true)
     {
         $gpx = '<?xml version="1.0" encoding="UTF-8"?>
-        <gpx version="1.1" creator="GPS Tracker App"
+<gpx version="1.1" creator="GPS Tracker App"
      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
      xmlns="http://www.topografix.com/GPX/1/1"
      xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">';
@@ -644,21 +679,14 @@ class RouteController extends Controller
             $gpx .= '
   <metadata>
     <name>Ruta - ' . htmlspecialchars($device->name) . '</name>
-    <desc>Ruta del ' . $route['start_date'] . ' al ' . $route['end_date'] . '</desc>
+    <desc>Ruta del ' . $route['start_time'] . ' al ' . $route['end_time'] . '</desc>
     <time>' . now()->toISOString() . '</time>
-    <bounds minlat="' . min(array_column($route['points'], 'lat')) . '" 
-            minlon="' . min(array_column($route['points'], 'lon')) . '" 
-            maxlat="' . max(array_column($route['points'], 'lat')) . '" 
-            maxlon="' . max(array_column($route['points'], 'lon')) . '"/>
   </metadata>';
         }
 
         $gpx .= '
   <trk>
-    <name>' . htmlspecialchars($device->name) . ' - ' .
-            Carbon::parse($route['start_date'])->format('d/m/Y') . '</name>
-    <desc>Distancia: ' . $route['statistics']['distance'] . ' km, Duración: ' .
-            $route['statistics']['duration_human'] . '</desc>
+    <name>' . htmlspecialchars($device->name) . '</name>
     <trkseg>';
 
         foreach ($route['points'] as $point) {
@@ -671,16 +699,7 @@ class RouteController extends Controller
             }
 
             $gpx .= '
-        <time>' . $point['timestamp'] . '</time>';
-
-            if ($point['speed'] !== null) {
-                // Convertir km/h a m/s para GPX
-                $speedMs = $point['speed'] / 3.6;
-                $gpx .= '
-        <speed>' . $speedMs . '</speed>';
-            }
-
-            $gpx .= '
+        <time>' . $point['timestamp'] . '</time>
       </trkpt>';
         }
 
@@ -695,44 +714,11 @@ class RouteController extends Controller
     private function generateKML($device, $route, $includeMetadata = true)
     {
         $kml = '<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">';
-
-        if ($includeMetadata) {
-            $kml .= '
+<kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>Ruta - ' . htmlspecialchars($device->name) . '</name>
-    <description><![CDATA[
-      <h3>Ruta del dispositivo: ' . htmlspecialchars($device->name) . '</h3>
-      <p><strong>Período:</strong> ' . Carbon::parse($route['start_date'])->format('d/m/Y H:i') .
-                ' a ' . Carbon::parse($route['end_date'])->format('d/m/Y H:i') . '</p>
-      <p><strong>Distancia:</strong> ' . $route['statistics']['distance'] . ' km</p>
-      <p><strong>Duración:</strong> ' . $route['statistics']['duration_human'] . '</p>
-      <p><strong>Velocidad promedio:</strong> ' . $route['statistics']['avg_speed'] . ' km/h</p>
-      <p><strong>Puntos totales:</strong> ' . $route['statistics']['total_points'] . '</p>
-    ]]></description>';
-        } else {
-            $kml .= '
-  <Document>
-    <name>' . htmlspecialchars($device->name) . '</name>';
-        }
-
-        $kml .= '
-    <Style id="trackStyle">
-      <LineStyle>
-        <color>ff0078ff</color>
-        <width>3</width>
-      </LineStyle>
-      <PolyStyle>
-        <color>7f00ff00</color>
-      </PolyStyle>
-    </Style>
     <Placemark>
-      <name>Ruta completa</name>
-      <description>Ruta del dispositivo ' . htmlspecialchars($device->name) . '</description>
-      <styleUrl>#trackStyle</styleUrl>
       <LineString>
-        <tessellate>1</tessellate>
-        <altitudeMode>clampToGround</altitudeMode>
         <coordinates>';
 
         foreach ($route['points'] as $point) {
@@ -741,44 +727,6 @@ class RouteController extends Controller
 
         $kml .= '</coordinates>
       </LineString>
-    </Placemark>
-    
-    <!-- Punto de inicio -->
-    <Placemark>
-      <name>Inicio</name>
-      <description>Punto de inicio de la ruta</description>
-      <Style>
-        <IconStyle>
-          <color>ff00ff00</color>
-          <scale>1.2</scale>
-          <Icon>
-            <href>http://maps.google.com/mapfiles/kml/pushpin/grn-pushpin.png</href>
-          </Icon>
-        </IconStyle>
-      </Style>
-      <Point>
-        <coordinates>' . $route['points'][0]['lon'] . ',' . $route['points'][0]['lat'] . ',0</coordinates>
-      </Point>
-    </Placemark>
-    
-    <!-- Punto final -->
-    <Placemark>
-      <name>Fin</name>
-      <description>Punto final de la ruta</description>
-      <Style>
-        <IconStyle>
-          <color>ffff0000</color>
-          <scale>1.2</scale>
-          <Icon>
-            <href>http://maps.google.com/mapfiles/kml/pushpin/red-pushpin.png</href>
-          </Icon>
-        </IconStyle>
-      </Style>
-      <Point>
-        <coordinates>' .
-            $route['points'][count($route['points']) - 1]['lon'] . ',' .
-            $route['points'][count($route['points']) - 1]['lat'] . ',0</coordinates>
-      </Point>
     </Placemark>
   </Document>
 </kml>';
