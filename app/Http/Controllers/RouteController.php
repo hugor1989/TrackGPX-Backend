@@ -19,7 +19,7 @@ class RouteController extends Controller
 
             // Obtener fechas con datos disponibles (últimos 30 días)
             $dates = Location::where('device_id', $device->id)
-                ->where('timestamp', '>=', Carbon::now()->subDays(30))
+                ->where('timestamp', '>=', Carbon::now()->subDays(90))
                 ->selectRaw('DATE(timestamp) as date, COUNT(*) as points')
                 ->groupBy(DB::raw('DATE(timestamp)'))
                 ->orderBy('date', 'DESC')
