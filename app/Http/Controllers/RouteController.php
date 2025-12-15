@@ -50,7 +50,7 @@ class RouteController extends Controller
         }
     }
 
-    // Obtener ruta por rango de fechas - CORREGIDO
+   
     public function getRouteByDate(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
@@ -84,7 +84,7 @@ class RouteController extends Controller
             $detectRoutes = $request->boolean('detect_routes', false);
             $maxIntervalMinutes = $request->max_interval_minutes ?? 5;
 
-            // Consulta base
+            // 🔍 Consulta base con CORRECCIÓN de longitud
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
@@ -97,6 +97,16 @@ class RouteController extends Controller
             if ($minBattery > 0) $query->where('battery_level', '>=', $minBattery);
 
             $locations = $query->get();
+
+            // 🐛 DEBUG: Ver qué datos trae
+            \Log::info('📍 RouteController - Ubicaciones encontradas:', [
+                'count' => $locations->count(),
+                'first_location' => $locations->first() ? [
+                    'lat' => $locations->first()->latitude,
+                    'lon' => $locations->first()->longitude,
+                    'timestamp' => $locations->first()->timestamp,
+                ] : null,
+            ]);
 
             if ($locations->isEmpty()) {
                 return response()->json([
@@ -112,6 +122,19 @@ class RouteController extends Controller
             // ========== MODO: DETECCIÓN DE MÚLTIPLES RUTAS ==========
             if ($detectRoutes) {
                 $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes, $device);
+
+                // 🐛 DEBUG: Ver cuántas rutas se detectaron
+                \Log::info('🛣️ Rutas detectadas:', [
+                    'total_routes' => count($routes),
+                    'routes_summary' => array_map(function($route) {
+                        return [
+                            'id' => $route['id'],
+                            'points' => count($route['points']),
+                            'start' => $route['start_time'],
+                            'end' => $route['end_time'],
+                        ];
+                    }, $routes)
+                ]);
 
                 // Aplicar compresión a cada ruta si se solicita
                 if ($request->compress) {
@@ -149,17 +172,11 @@ class RouteController extends Controller
                 $route['statistics']['total_points'] = count($route['points']);
             }
 
-            // Reorganizar puntos como objeto con claves numéricas (manteniendo compatibilidad)
-            $reorganizedPoints = [];
-            foreach ($route['points'] as $index => $point) {
-                $reorganizedPoints[$index * 10] = $point; // Claves como 0, 10, 20, 30...
-            }
-
             return response()->json([
                 'success' => true,
                 'mode' => 'single_route',
                 'route' => [
-                    'points' => $reorganizedPoints, // Objeto con claves numéricas
+                    'points' => $route['points'], // ✅ Array normal, sin reorganizar
                     'statistics' => $route['statistics'],
                     'start_time' => $route['start_time'],
                     'end_time' => $route['end_time'],
@@ -174,6 +191,11 @@ class RouteController extends Controller
                 'message' => 'Ruta única generada correctamente'
             ]);
         } catch (\Exception $e) {
+            \Log::error('❌ Error en getRouteByDate:', [
+                'message' => $e->getMessage(),
+                'line' => $e->getLine(),
+            ]);
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener ruta: ' . $e->getMessage()
@@ -189,9 +211,17 @@ class RouteController extends Controller
         $points = [];
 
         foreach ($locations as $location) {
+            // ✅ CORRECCIÓN: Asegurar que longitude sea negativa si está en México
+            $longitude = (float) $location->longitude;
+            
+            // Si la longitud es positiva pero debería ser negativa (México está en -90 a -120)
+            if ($longitude > 0 && $longitude < 180) {
+                $longitude = -$longitude;
+            }
+
             $points[] = [
                 'lat' => (float) $location->latitude,
-                'lon' => (float) $location->longitude,
+                'lon' => $longitude, // ✅ Longitud corregida
                 'speed' => $location->speed !== null ? (float) $location->speed : null,
                 'altitude' => $location->altitude !== null ? (float) $location->altitude : null,
                 'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
@@ -211,7 +241,7 @@ class RouteController extends Controller
     }
 
     /**
-     * Detectar múltiples rutas basadas en intervalos de tiempo
+     * 🔥 Detectar múltiples rutas basadas en intervalos de tiempo - MEJORADO
      */
     private function detectMultipleRoutes($locations, $maxIntervalMinutes = 5, $device = null)
     {
@@ -222,50 +252,65 @@ class RouteController extends Controller
         $routeIndex = 0;
 
         foreach ($locations as $index => $location) {
+            // ✅ CORRECCIÓN: Asegurar que longitude sea negativa si está en México
+            $longitude = (float) $location->longitude;
+            if ($longitude > 0 && $longitude < 180) {
+                $longitude = -$longitude;
+            }
+
+            $currentPoint = [
+                'lat' => (float) $location->latitude,
+                'lon' => $longitude,
+                'speed' => $location->speed !== null ? (float) $location->speed : null,
+                'altitude' => $location->altitude !== null ? (float) $location->altitude : null,
+                'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
+                'timestamp' => $location->timestamp->toISOString(),
+            ];
+
             // Si es el primer punto, iniciar una nueva ruta
             if ($previousLocation === null) {
                 $routeIndex++;
                 $currentRoute = [
                     'id' => $routeIndex,
-                    'points' => [],
-                    'start_time' => $location->timestamp,
-                    'end_time' => $location->timestamp,
+                    'points' => [$currentPoint],
+                    'start_time' => $location->timestamp->toISOString(),
+                    'end_time' => $location->timestamp->toISOString(),
                 ];
+                
+                \Log::info("🆕 Nueva ruta #{$routeIndex} iniciada");
             } else {
                 // Calcular diferencia de tiempo con el punto anterior
                 $timeDiff = Carbon::parse($location->timestamp)
                     ->diffInSeconds(Carbon::parse($previousLocation->timestamp));
 
+                \Log::info("⏱️ Diferencia de tiempo: {$timeDiff}s (máximo: {$maxIntervalSeconds}s)");
+
                 // Si hay más de X minutos de diferencia, finalizar ruta actual
                 if ($timeDiff > $maxIntervalSeconds) {
                     // Finalizar ruta anterior si tiene puntos
                     if ($currentRoute && count($currentRoute['points']) > 0) {
-                        $currentRoute['end_time'] = $previousLocation->timestamp;
+                        $currentRoute['end_time'] = $previousLocation->timestamp->toISOString();
                         $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
                         $routes[] = $currentRoute;
+                        
+                        \Log::info("✅ Ruta #{$currentRoute['id']} finalizada con " . count($currentRoute['points']) . " puntos");
                     }
 
                     // Iniciar nueva ruta
                     $routeIndex++;
                     $currentRoute = [
                         'id' => $routeIndex,
-                        'points' => [],
-                        'start_time' => $location->timestamp,
-                        'end_time' => $location->timestamp,
+                        'points' => [$currentPoint],
+                        'start_time' => $location->timestamp->toISOString(),
+                        'end_time' => $location->timestamp->toISOString(),
                     ];
+                    
+                    \Log::info("🆕 Nueva ruta #{$routeIndex} iniciada por intervalo");
+                } else {
+                    // Agregar punto a la ruta actual
+                    $currentRoute['points'][] = $currentPoint;
+                    $currentRoute['end_time'] = $location->timestamp->toISOString();
                 }
-            }
-
-            // Agregar punto a la ruta actual
-            if ($currentRoute) {
-                $currentRoute['points'][] = [
-                    'lat' => (float) $location->latitude,
-                    'lon' => (float) $location->longitude,
-                    'speed' => $location->speed !== null ? (float) $location->speed : null,
-                    'altitude' => $location->altitude !== null ? (float) $location->altitude : null,
-                    'battery' => $location->battery_level !== null ? (int) $location->battery_level : null,
-                    'timestamp' => $location->timestamp->toISOString(),
-                ];
             }
 
             $previousLocation = $location;
@@ -273,18 +318,10 @@ class RouteController extends Controller
 
         // Agregar la última ruta si existe
         if ($currentRoute && count($currentRoute['points']) > 0) {
-            $currentRoute['end_time'] = $locations->last()->timestamp;
             $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
             $routes[] = $currentRoute;
-        }
-
-        // Reorganizar puntos como objeto con claves numéricas para cada ruta
-        foreach ($routes as &$route) {
-            $reorganizedPoints = [];
-            foreach ($route['points'] as $index => $point) {
-                $reorganizedPoints[$index * 10] = $point; // Claves como 0, 10, 20, 30...
-            }
-            $route['points'] = $reorganizedPoints;
+            
+            \Log::info("✅ Última ruta #{$currentRoute['id']} finalizada con " . count($currentRoute['points']) . " puntos");
         }
 
         return $routes;
@@ -359,14 +396,12 @@ class RouteController extends Controller
             'duration' => $totalDuration,
             'duration_human' => $this->secondsToHuman($totalDuration),
             'avg_speed' => round($avgSpeed, 2),
-            'max_speed' => count($speeds) > 0 ? max($speeds) : 0,
-            'min_speed' => count($speeds) > 0 ? min($speeds) : 0,
+            'max_speed' => count($speeds) > 0 ? round(max($speeds), 2) : 0,
+            'min_speed' => count($speeds) > 0 ? round(min($speeds), 2) : 0,
             'avg_battery' => $avgBattery !== null ? round($avgBattery, 1) : null,
             'min_battery' => count($batteries) > 0 ? min($batteries) : null,
             'max_battery' => count($batteries) > 0 ? max($batteries) : null,
             'avg_altitude' => $avgAltitude !== null ? round($avgAltitude, 1) : null,
-            'first_point_time' => $points[0]['timestamp'],
-            'last_point_time' => $points[count($points) - 1]['timestamp'],
         ];
 
         $route['device_name'] = $device ? $device->name : 'Dispositivo';
@@ -382,12 +417,24 @@ class RouteController extends Controller
     {
         if ($compressFactor <= 1) return $points;
 
-        return array_filter($points, function ($index) use ($compressFactor) {
-            return $index % $compressFactor === 0;
-        }, ARRAY_FILTER_USE_KEY);
+        $compressed = [];
+        foreach ($points as $index => $point) {
+            if ($index % $compressFactor === 0) {
+                $compressed[] = $point;
+            }
+        }
+        
+        // Siempre incluir el último punto
+        if (end($compressed) !== end($points)) {
+            $compressed[] = end($points);
+        }
+        
+        return $compressed;
     }
 
-    // Función para calcular distancia Haversine (más precisa)
+    /**
+     * Función para calcular distancia Haversine (más precisa)
+     */
     private function calculateHaversineDistance($lat1, $lon1, $lat2, $lon2)
     {
         $earthRadius = 6371000; // Radio de la Tierra en metros
@@ -408,7 +455,9 @@ class RouteController extends Controller
         return $angle * $earthRadius;
     }
 
-    // Convertir segundos a formato humano
+    /**
+     * Convertir segundos a formato humano
+     */
     private function secondsToHuman($seconds)
     {
         $hours = floor($seconds / 3600);
@@ -422,6 +471,7 @@ class RouteController extends Controller
 
         return implode(' ', $result);
     }
+    
 
     // Obtener resumen de rutas por día
     public function getRoutesSummary(Request $request, $deviceId)
