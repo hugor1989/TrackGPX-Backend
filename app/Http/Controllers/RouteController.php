@@ -7,7 +7,9 @@ use App\Models\Location;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+
 
 class RouteController extends Controller
 {
@@ -98,7 +100,7 @@ class RouteController extends Controller
 
             $locations = $query->get();
 
-            \Log::info('📍 Ubicaciones encontradas:', [
+            Log::info('📍 Ubicaciones encontradas:', [
                 'count' => $locations->count(),
                 'first_location' => $locations->first() ? [
                     'lat' => $locations->first()->latitude,
@@ -122,7 +124,7 @@ class RouteController extends Controller
             if ($detectRoutes) {
                 $routes = $this->detectMultipleRoutes($locations, $maxIntervalMinutes, $device);
 
-                \Log::info('🛣️ Rutas detectadas:', [
+                Log::info('🛣️ Rutas detectadas:', [
                     'total_routes' => count($routes),
                     'routes_summary' => array_map(function ($route) {
                         return [
@@ -189,7 +191,7 @@ class RouteController extends Controller
                 'message' => 'Ruta única generada correctamente'
             ]);
         } catch (\Exception $e) {
-            \Log::error('❌ Error en getRouteByDate:', [
+            Log::error('❌ Error en getRouteByDate:', [
                 'message' => $e->getMessage(),
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
@@ -210,6 +212,12 @@ class RouteController extends Controller
         $points = [];
 
         foreach ($locations as $location) {
+
+            // Validar timestamp
+            if (!$location->timestamp || !$location->timestamp instanceof Carbon) {
+                Log::warning('Timestamp inválido en ubicación', ['location_id' => $location->id]);
+                continue;
+            }
             $longitude = (float) $location->longitude;
 
             // Si la longitud es positiva pero debería ser negativa (México está en -90 a -120)
@@ -249,11 +257,13 @@ class RouteController extends Controller
         $maxIntervalSeconds = $maxIntervalMinutes * 60;
         $routeIndex = 0;
 
-        \Log::info('🔍 Iniciando detección de rutas', [
+        Log::info('🔍 Iniciando detección de rutas', [
             'total_locations' => $locations->count(),
             'max_interval_minutes' => $maxIntervalMinutes,
             'max_interval_seconds' => $maxIntervalSeconds
         ]);
+
+
 
         foreach ($locations as $index => $location) {
             // Corregir longitud
@@ -273,6 +283,15 @@ class RouteController extends Controller
 
             $currentTimestamp = Carbon::parse($location->timestamp);
 
+            // Agregar después de línea ~240:
+            if (!$currentTimestamp->isValid()) {
+                Log::warning('⚠️ Timestamp inválido omitido', [
+                    'timestamp' => $location->timestamp,
+                    'location_id' => $location->id
+                ]);
+                continue; // Saltar punto inválido
+            }
+
             // Si es el primer punto, iniciar nueva ruta
             if ($previousTimestamp === null) {
                 $routeIndex++;
@@ -283,7 +302,7 @@ class RouteController extends Controller
                     'end_time' => $location->timestamp->toISOString(),
                 ];
 
-                \Log::info("🆕 Ruta #{$routeIndex} iniciada (primer punto)", [
+                Log::info("🆕 Ruta #{$routeIndex} iniciada (primer punto)", [
                     'timestamp' => $currentTimestamp->toISOString(),
                     'index' => $index
                 ]);
@@ -291,7 +310,7 @@ class RouteController extends Controller
                 // Calcular diferencia de tiempo con el punto anterior
                 $timeDiff = $currentTimestamp->diffInSeconds($previousTimestamp);
 
-                \Log::info("⏱️ Analizando punto #{$index}", [
+                Log::info("⏱️ Analizando punto #{$index}", [
                     'current_time' => $currentTimestamp->toISOString(),
                     'previous_time' => $previousTimestamp->toISOString(),
                     'time_diff_seconds' => $timeDiff,
@@ -306,7 +325,7 @@ class RouteController extends Controller
                         $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
                         $routes[] = $currentRoute;
 
-                        \Log::info("✅ Ruta #{$currentRoute['id']} finalizada", [
+                        Log::info("✅ Ruta #{$currentRoute['id']} finalizada", [
                             'points' => count($currentRoute['points']),
                             'start' => $currentRoute['start_time'],
                             'end' => $currentRoute['end_time'],
@@ -323,7 +342,7 @@ class RouteController extends Controller
                         'end_time' => $location->timestamp->toISOString(),
                     ];
 
-                    \Log::info("🆕 Ruta #{$routeIndex} iniciada (por intervalo)", [
+                    Log::info("🆕 Ruta #{$routeIndex} iniciada (por intervalo)", [
                         'timestamp' => $currentTimestamp->toISOString(),
                         'previous_route_ended' => $previousTimestamp->toISOString(),
                         'gap_seconds' => $timeDiff
@@ -333,7 +352,7 @@ class RouteController extends Controller
                     $currentRoute['points'][] = $currentPoint;
                     $currentRoute['end_time'] = $location->timestamp->toISOString();
 
-                    \Log::info("➕ Punto agregado a ruta #{$currentRoute['id']}", [
+                    Log::info("➕ Punto agregado a ruta #{$currentRoute['id']}", [
                         'total_points' => count($currentRoute['points']),
                         'time_diff' => $timeDiff
                     ]);
@@ -348,14 +367,14 @@ class RouteController extends Controller
             $currentRoute = $this->calculateRouteStatistics($currentRoute, $device);
             $routes[] = $currentRoute;
 
-            \Log::info("✅ Última ruta #{$currentRoute['id']} finalizada", [
+            Log::info("✅ Última ruta #{$currentRoute['id']} finalizada", [
                 'points' => count($currentRoute['points']),
                 'start' => $currentRoute['start_time'],
                 'end' => $currentRoute['end_time']
             ]);
         }
 
-        \Log::info('🏁 Detección completada', [
+        Log::info('🏁 Detección completada', [
             'total_routes' => count($routes),
             'routes' => array_map(function ($r) {
                 return [
@@ -370,7 +389,7 @@ class RouteController extends Controller
     }
 
     /**
-     * Calcular estadísticas para una ruta
+     * Calcular estadísticas para una ruta - VERSIÓN CORREGIDA
      */
     private function calculateRouteStatistics($route, $device = null)
     {
@@ -389,13 +408,41 @@ class RouteController extends Controller
                 'min_battery' => null,
                 'max_battery' => null,
                 'avg_altitude' => null,
+                'first_point_time' => null,
+                'last_point_time' => null,
             ];
             return $route;
         }
 
-        // Calcular distancia, duración y estadísticas
-        $totalDistance = 0;
+        // ✅ 1. ORDENAR PUNTOS POR TIMESTAMP (por si acaso)
+        usort($points, function ($a, $b) {
+            return strtotime($a['timestamp']) <=> strtotime($b['timestamp']);
+        });
+
+        // ✅ 2. OBTENER PRIMER Y ÚLTIMO TIMESTAMP VÁLIDO
+        $firstTimestamp = null;
+        $lastTimestamp = null;
+
+        foreach ($points as $point) {
+            $ts = strtotime($point['timestamp']);
+            if ($ts !== false) {
+                if ($firstTimestamp === null || $ts < $firstTimestamp) {
+                    $firstTimestamp = $ts;
+                }
+                if ($lastTimestamp === null || $ts > $lastTimestamp) {
+                    $lastTimestamp = $ts;
+                }
+            }
+        }
+
+        // ✅ 3. CALCULAR DURACIÓN CORRECTAMENTE
         $totalDuration = 0;
+        if ($firstTimestamp !== null && $lastTimestamp !== null && $lastTimestamp > $firstTimestamp) {
+            $totalDuration = $lastTimestamp - $firstTimestamp; // en segundos
+        }
+
+        // ✅ 4. CALCULAR DISTANCIA
+        $totalDistance = 0;
         $speeds = [];
         $batteries = [];
         $altitudes = [];
@@ -413,11 +460,6 @@ class RouteController extends Controller
             );
             $totalDistance += $distance;
 
-            // Calcular duración
-            $duration = Carbon::parse($current['timestamp'])
-                ->diffInSeconds(Carbon::parse($prev['timestamp']));
-            $totalDuration += $duration;
-
             // Recolectar datos para promedios
             if ($current['speed'] !== null) $speeds[] = $current['speed'];
             if ($current['battery'] !== null) $batteries[] = $current['battery'];
@@ -427,8 +469,17 @@ class RouteController extends Controller
         // Convertir distancia a km
         $totalDistanceKm = $totalDistance / 1000;
 
-        // Calcular promedios
-        $avgSpeed = count($speeds) > 0 ? array_sum($speeds) / count($speeds) : 0;
+        // ✅ 5. CALCULAR VELOCIDAD PROMEDIO (MEJOR CÁLCULO)
+        $avgSpeed = 0;
+        if ($totalDuration > 0 && $totalDistanceKm > 0) {
+            // Velocidad promedio real = distancia total / tiempo total
+            $avgSpeed = ($totalDistanceKm / $totalDuration) * 3600; // km/h
+        } elseif (count($speeds) > 0) {
+            // Fallback: promedio de velocidades registradas
+            $avgSpeed = array_sum($speeds) / count($speeds);
+        }
+
+        // ✅ 6. CALCULAR OTROS PROMEDIOS
         $avgBattery = count($batteries) > 0 ? array_sum($batteries) / count($batteries) : null;
         $avgAltitude = count($altitudes) > 0 ? array_sum($altitudes) / count($altitudes) : null;
 
@@ -444,10 +495,31 @@ class RouteController extends Controller
             'min_battery' => count($batteries) > 0 ? min($batteries) : null,
             'max_battery' => count($batteries) > 0 ? max($batteries) : null,
             'avg_altitude' => $avgAltitude !== null ? round($avgAltitude, 1) : null,
+            'first_point_time' => $firstTimestamp !== null ? date('c', $firstTimestamp) : null,
+            'last_point_time' => $lastTimestamp !== null ? date('c', $lastTimestamp) : null,
         ];
+
+        // ✅ 7. ACTUALIZAR START/END TIME DE LA RUTA
+        if ($firstTimestamp !== null) {
+            $route['start_time'] = date('c', $firstTimestamp);
+        }
+        if ($lastTimestamp !== null) {
+            $route['end_time'] = date('c', $lastTimestamp);
+        }
 
         $route['device_name'] = $device ? $device->name : 'Dispositivo';
         $route['device_id'] = $device ? $device->id : 0;
+
+        // ✅ 8. LOG PARA DEBUG
+        Log::info('📊 Estadísticas calculadas:', [
+            'points' => count($points),
+            'duration_seconds' => $totalDuration,
+            'duration_human' => $this->secondsToHuman($totalDuration),
+            'distance_km' => $totalDistanceKm,
+            'avg_speed_kmh' => $avgSpeed,
+            'first_timestamp' => $route['start_time'],
+            'last_timestamp' => $route['end_time'],
+        ]);
 
         return $route;
     }
@@ -502,6 +574,11 @@ class RouteController extends Controller
      */
     private function secondsToHuman($seconds)
     {
+        // Manejar valores negativos
+        if ($seconds < 0) {
+            return '⚠️ ' . $this->secondsToHuman(abs($seconds)) . ' (negativo)';
+        }
+
         $hours = floor($seconds / 3600);
         $minutes = floor(($seconds % 3600) / 60);
         $secs = $seconds % 60;
