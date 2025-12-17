@@ -806,7 +806,7 @@ class DeviceController extends Controller
     {
         try {
             $device = Device::findOrFail($id);
-            
+
             // Validar parámetros
             $validator = Validator::make($request->all(), [
                 'from' => 'required|date',
@@ -893,7 +893,6 @@ class DeviceController extends Controller
                     'endTime' => $lastTimestamp->toIso8601String(),
                 ]
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -954,7 +953,6 @@ class DeviceController extends Controller
                 'message' => 'Configuración actualizada correctamente',
                 'device' => $device->load('configuration')
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1009,7 +1007,6 @@ class DeviceController extends Controller
                 'message' => 'Alarmas configuradas correctamente',
                 'alarms' => $alarmConfig
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1036,7 +1033,6 @@ class DeviceController extends Controller
                 'success' => true,
                 'alarms' => $device->alarms
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1045,81 +1041,16 @@ class DeviceController extends Controller
         }
     }
 
-    /**
-     * 📤 Enviar comando al dispositivo
-     * POST /api/devices/{id}/commands
-     */
-    /* public function sendCommand(Request $request, $id)
+    public function getIdByImei($imei)
     {
-        try {
-            $device = Device::findOrFail($id);
+        $device = Device::where('imei', $imei)->firstOrFail();
 
-            $validator = Validator::make($request->all(), [
-                'command' => 'required|string|in:locate,restart,lock,unlock,sos',
-                'parameters' => 'nullable|array',
-            ]);
+        return response()->json([
+            'success' => true,
+            'device_id' => $device->id,
+        ]);
+    }
 
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Comando inválido',
-                    'errors' => $validator->errors()
-                ], 400);
-            }
-
-            // Guardar comando en base de datos
-            $deviceCommand = DeviceCommand::create([
-                'device_id' => $device->id,
-                'command' => $request->command,
-                'parameters' => $request->parameters,
-                'status' => 'pending',
-                'sent_at' => now(),
-            ]);
-
-            // TODO: Enviar comando real al dispositivo GPS
-            // Esto dependerá de tu protocolo de comunicación
-            // (Socket.IO, MQTT, HTTP, etc.)
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Comando enviado correctamente',
-                'command' => $deviceCommand
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al enviar comando: ' . $e->getMessage()
-            ], 500);
-        }
-    } */
-
-    /**
-     * 📋 Obtener historial de comandos
-     * GET /api/devices/{id}/commands
-     */
-/*     public function getCommands($id)
-    {
-        try {
-            $device = Device::findOrFail($id);
-
-            $commands = DeviceCommand::where('device_id', $device->id)
-                ->orderBy('sent_at', 'desc')
-                ->take(20)
-                ->get();
-
-            return response()->json([
-                'success' => true,
-                'commands' => $commands
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al obtener comandos: ' . $e->getMessage()
-            ], 500);
-        }
-    } */
 
     /**
      * 📏 Calcular distancia entre dos puntos (Haversine formula)
@@ -1132,8 +1063,8 @@ class DeviceController extends Controller
         $dLon = deg2rad($lon2 - $lon1);
 
         $a = sin($dLat / 2) * sin($dLat / 2) +
-             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-             sin($dLon / 2) * sin($dLon / 2);
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($dLon / 2) * sin($dLon / 2);
 
         $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
 
