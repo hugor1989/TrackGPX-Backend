@@ -15,12 +15,32 @@ use App\Http\Controllers\SimCardController;
 use App\Http\Controllers\DeviceConfigurationController;    
 use App\Http\Controllers\GeofenceController;
 use App\Http\Controllers\RouteController;
+use App\Http\Controllers\PushTokenController;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 Route::options('{any}', function () {
     return response()->json([], 204);
 })->where('any', '.*');
 
-
+Route::get('/debug/auth', function (Request $request) {
+    Log::info('🔐 Debug auth endpoint', [
+        'user' => $request->user() ? [
+            'id' => $request->user()->id,
+            'email' => $request->user()->email,
+            'type' => get_class($request->user())
+        ] : null,
+        'headers' => $request->headers->all(),
+        'bearer_token' => $request->bearerToken(),
+        'middleware' => $request->route()?->gatherMiddleware(),
+    ]);
+    
+    return response()->json([
+        'authenticated' => $request->user() ? true : false,
+        'user' => $request->user(),
+        'token_present' => $request->bearerToken() ? true : false,
+    ]);
+})->middleware('auth:sanctum'); // Probar con sanctum
 #region Webhook
 Route::post('/webhooks/openpay', [WebhookController::class, 'handleOpenPayWebhook'])
     ->name('webhooks.openpay');
@@ -102,6 +122,8 @@ Route::middleware('auth:customer')->group(function () {
     Route::get('customer/get-cards', [CardController::class, 'getCards']);
     Route::get('customer/get-card-Id/{cardId}', [CardController::class, 'getCard']);
     Route::delete('customer/delete-cards/{cardId}', [CardController::class, 'deleteCard']);
+    Route::post('customer/push-token', [PushTokenController::class, 'store']);
+
 
     //Activate GPS
     Route::post('devices/activate-gps', [DeviceController::class, 'activateFromApp']);
