@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\OpenPayService;
-
+use App\Events\SubscriptionPaid;
 
 class SubscriptionController extends AppBaseController
 {
@@ -329,13 +329,13 @@ class SubscriptionController extends AppBaseController
         $request->validate([
             'subscription_id' => 'required|integer|exists:subscriptions,id',
             'card_id' => 'required|string',
-            'device_session_id' => 'required|string' // ← Validar el nuevo campo
+            'device_session_id' => 'required|string'
         ]);
 
         $user = Auth::user();
-        $subscription = Subscription::find($request->subscription_id);
+        $subscription = Subscription::with(['plan', 'device.vehicle'])->find($request->subscription_id);
 
-        // Verificaciones de seguridad...
+        // Verificaciones de seguridad
         if ($subscription->customer_id !== $user->id) {
             return response()->json([
                 'success' => false,
@@ -351,32 +351,68 @@ class SubscriptionController extends AppBaseController
         }
 
         try {
+            Log::info('💳 Procesando pago de subscripción', [
+                'customer_id' => $user->id,
+                'subscription_id' => $subscription->id,
+                'plan_id' => $subscription->plan_id,
+            ]);
+
             // Procesar el pago con device_session_id
             $result = $this->openPayService->paySubscription(
                 $user->openpay_customer_id,
                 $subscription,
                 $request->card_id,
-                $request->device_session_id // ← Pasar el device_session_id
+                $request->device_session_id
             );
 
             if ($result['success']) {
+                // Actualizar la subscripción
                 $subscription->update([
                     'status' => 'active',
                     'start_date' => now(),
-                    'end_date' => now()->addMonths($subscription->plan->interval === 'month' ? 1 : 12)
+                    'end_date' => now()->addMonths($subscription->plan->interval === 'month' ? 1 : 12),
+                    'paid_at' => now(),
+                    'payment_reference' => $result['transaction_id'] ?? null, // Si OpenPay devuelve ID
                 ]);
+
+                Log::info('✅ Pago procesado exitosamente', [
+                    'subscription_id' => $subscription->id,
+                    'start_date' => $subscription->start_date,
+                    'end_date' => $subscription->end_date,
+                ]);
+
+                // ✅ DISPARAR EVENTO DE NOTIFICACIÓN
+                SubscriptionPaid::dispatch($subscription);
 
                 return response()->json([
                     'success' => true,
-                    'message' => 'Pago procesado correctamente'
+                    'message' => 'Pago procesado correctamente',
+                    'subscription' => [
+                        'id' => $subscription->id,
+                        'plan' => $subscription->plan->name,
+                        'start_date' => $subscription->start_date->format('Y-m-d'),
+                        'end_date' => $subscription->end_date->format('Y-m-d'),
+                        'status' => $subscription->status,
+                    ]
                 ]);
             }
+
+            Log::error('❌ Error en pago de OpenPay', [
+                'subscription_id' => $subscription->id,
+                'error' => $result['error'],
+            ]);
 
             return response()->json([
                 'success' => false,
                 'message' => $result['error']
             ], 400);
         } catch (\Exception $e) {
+            Log::error('❌ Excepción procesando pago', [
+                'subscription_id' => $subscription->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error procesando el pago: ' . $e->getMessage()
