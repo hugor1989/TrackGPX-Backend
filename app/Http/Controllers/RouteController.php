@@ -86,12 +86,21 @@ class RouteController extends Controller
             $detectRoutes = $request->boolean('detect_routes', false);
             $maxIntervalMinutes = $request->max_interval_minutes ?? 5;
 
-            // Consulta base
+            // ✅ LOG DE DEBUG
+            Log::info('🔍 Parámetros recibidos:', [
+                'device_id' => $deviceId,
+                'start_date' => $startDate->toISOString(),
+                'end_date' => $endDate->toISOString(),
+                'detect_routes' => $detectRoutes,
+                'max_interval_minutes' => $maxIntervalMinutes,
+            ]);
+
+            // Consulta base - ✅ ORDENAR POR TIMESTAMP
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
                 ->where('longitude', '!=', 0)
-                ->orderBy('timestamp', 'ASC');
+                ->orderBy('timestamp', 'ASC'); // 🔥 CRÍTICO: Ordenar aquí
 
             // Aplicar filtros
             if ($minSpeed > 0) $query->where('speed', '>=', $minSpeed);
@@ -102,10 +111,15 @@ class RouteController extends Controller
 
             Log::info('📍 Ubicaciones encontradas:', [
                 'count' => $locations->count(),
-                'first_location' => $locations->first() ? [
+                'first' => $locations->first() ? [
+                    'timestamp' => $locations->first()->timestamp->toISOString(),
                     'lat' => $locations->first()->latitude,
                     'lon' => $locations->first()->longitude,
-                    'timestamp' => $locations->first()->timestamp,
+                ] : null,
+                'last' => $locations->last() ? [
+                    'timestamp' => $locations->last()->timestamp->toISOString(),
+                    'lat' => $locations->last()->latitude,
+                    'lon' => $locations->last()->longitude,
                 ] : null,
             ]);
 
@@ -132,6 +146,7 @@ class RouteController extends Controller
                             'points' => count($route['points']),
                             'start' => $route['start_time'],
                             'end' => $route['end_time'],
+                            'duration' => $route['statistics']['duration_human'] ?? 'N/A',
                         ];
                     }, $routes)
                 ]);
@@ -140,8 +155,10 @@ class RouteController extends Controller
                 if ($request->compress) {
                     $compressFactor = $request->compress_factor ?? 10;
                     foreach ($routes as &$route) {
+                        $originalPoints = count($route['points']);
                         $route['points'] = $this->compressPoints($route['points'], $compressFactor);
                         $route['statistics']['total_points'] = count($route['points']);
+                        $route['statistics']['original_points'] = $originalPoints;
                     }
                 }
 
@@ -168,8 +185,10 @@ class RouteController extends Controller
             // Aplicar compresión si se solicita
             if ($request->compress) {
                 $compressFactor = $request->compress_factor ?? 10;
+                $originalPoints = count($route['points']);
                 $route['points'] = $this->compressPoints($route['points'], $compressFactor);
                 $route['statistics']['total_points'] = count($route['points']);
+                $route['statistics']['original_points'] = $originalPoints;
             }
 
             return response()->json([
@@ -194,6 +213,7 @@ class RouteController extends Controller
             Log::error('❌ Error en getRouteByDate:', [
                 'message' => $e->getMessage(),
                 'line' => $e->getLine(),
+                'file' => $e->getFile(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
@@ -260,12 +280,21 @@ class RouteController extends Controller
         Log::info('🔍 Iniciando detección de rutas', [
             'total_locations' => $locations->count(),
             'max_interval_minutes' => $maxIntervalMinutes,
-            'max_interval_seconds' => $maxIntervalSeconds
+            'max_interval_seconds' => $maxIntervalSeconds,
+            'first_timestamp' => $locations->first()->timestamp->toISOString(),
+            'last_timestamp' => $locations->last()->timestamp->toISOString(),
         ]);
 
-
-
         foreach ($locations as $index => $location) {
+            // Validar timestamp
+            if (!$location->timestamp || !($location->timestamp instanceof Carbon)) {
+                Log::warning('⚠️ Timestamp inválido omitido', [
+                    'location_id' => $location->id,
+                    'timestamp' => $location->timestamp
+                ]);
+                continue;
+            }
+
             // Corregir longitud
             $longitude = (float) $location->longitude;
             if ($longitude > 0 && $longitude < 180) {
@@ -281,16 +310,7 @@ class RouteController extends Controller
                 'timestamp' => $location->timestamp->toISOString(),
             ];
 
-            $currentTimestamp = Carbon::parse($location->timestamp);
-
-            // Agregar después de línea ~240:
-            if (!$currentTimestamp->isValid()) {
-                Log::warning('⚠️ Timestamp inválido omitido', [
-                    'timestamp' => $location->timestamp,
-                    'location_id' => $location->id
-                ]);
-                continue; // Saltar punto inválido
-            }
+            $currentTimestamp = $location->timestamp;
 
             // Si es el primer punto, iniciar nueva ruta
             if ($previousTimestamp === null) {
@@ -298,8 +318,8 @@ class RouteController extends Controller
                 $currentRoute = [
                     'id' => $routeIndex,
                     'points' => [$currentPoint],
-                    'start_time' => $location->timestamp->toISOString(),
-                    'end_time' => $location->timestamp->toISOString(),
+                    'start_time' => $currentTimestamp->toISOString(),
+                    'end_time' => $currentTimestamp->toISOString(),
                 ];
 
                 Log::info("🆕 Ruta #{$routeIndex} iniciada (primer punto)", [
@@ -307,18 +327,21 @@ class RouteController extends Controller
                     'index' => $index
                 ]);
             } else {
-                // Calcular diferencia de tiempo con el punto anterior
+                // ✅ Calcular diferencia de tiempo (en segundos)
                 $timeDiff = $currentTimestamp->diffInSeconds($previousTimestamp);
 
-                Log::info("⏱️ Analizando punto #{$index}", [
-                    'current_time' => $currentTimestamp->toISOString(),
-                    'previous_time' => $previousTimestamp->toISOString(),
-                    'time_diff_seconds' => $timeDiff,
-                    'max_allowed_seconds' => $maxIntervalSeconds,
-                    'exceeds_limit' => $timeDiff > $maxIntervalSeconds
-                ]);
+                // 🔥 DEBUG: Mostrar cada 10 puntos para no saturar logs
+                if ($index % 10 === 0) {
+                    Log::info("⏱️ Analizando punto #{$index}", [
+                        'current_time' => $currentTimestamp->toISOString(),
+                        'previous_time' => $previousTimestamp->toISOString(),
+                        'time_diff_seconds' => $timeDiff,
+                        'max_allowed_seconds' => $maxIntervalSeconds,
+                        'current_route_points' => count($currentRoute['points']),
+                    ]);
+                }
 
-                // 🔥 CORRECCIÓN CRÍTICA: Si el intervalo excede el límite, finalizar ruta actual
+                // 🔥 Si el intervalo excede el límite, finalizar ruta actual
                 if ($timeDiff > $maxIntervalSeconds) {
                     // Finalizar ruta anterior
                     if ($currentRoute && count($currentRoute['points']) > 0) {
@@ -329,6 +352,8 @@ class RouteController extends Controller
                             'points' => count($currentRoute['points']),
                             'start' => $currentRoute['start_time'],
                             'end' => $currentRoute['end_time'],
+                            'duration' => $currentRoute['statistics']['duration_human'],
+                            'gap_seconds' => $timeDiff,
                             'reason' => "Intervalo de {$timeDiff}s excede límite de {$maxIntervalSeconds}s"
                         ]);
                     }
@@ -338,24 +363,18 @@ class RouteController extends Controller
                     $currentRoute = [
                         'id' => $routeIndex,
                         'points' => [$currentPoint],
-                        'start_time' => $location->timestamp->toISOString(),
-                        'end_time' => $location->timestamp->toISOString(),
+                        'start_time' => $currentTimestamp->toISOString(),
+                        'end_time' => $currentTimestamp->toISOString(),
                     ];
 
                     Log::info("🆕 Ruta #{$routeIndex} iniciada (por intervalo)", [
                         'timestamp' => $currentTimestamp->toISOString(),
-                        'previous_route_ended' => $previousTimestamp->toISOString(),
-                        'gap_seconds' => $timeDiff
+                        'gap_from_previous' => $timeDiff . 's',
                     ]);
                 } else {
                     // Agregar punto a la ruta actual
                     $currentRoute['points'][] = $currentPoint;
-                    $currentRoute['end_time'] = $location->timestamp->toISOString();
-
-                    Log::info("➕ Punto agregado a ruta #{$currentRoute['id']}", [
-                        'total_points' => count($currentRoute['points']),
-                        'time_diff' => $timeDiff
-                    ]);
+                    $currentRoute['end_time'] = $currentTimestamp->toISOString();
                 }
             }
 
@@ -370,19 +389,14 @@ class RouteController extends Controller
             Log::info("✅ Última ruta #{$currentRoute['id']} finalizada", [
                 'points' => count($currentRoute['points']),
                 'start' => $currentRoute['start_time'],
-                'end' => $currentRoute['end_time']
+                'end' => $currentRoute['end_time'],
+                'duration' => $currentRoute['statistics']['duration_human'],
             ]);
         }
 
         Log::info('🏁 Detección completada', [
             'total_routes' => count($routes),
-            'routes' => array_map(function ($r) {
-                return [
-                    'id' => $r['id'],
-                    'points' => count($r['points']),
-                    'duration' => $r['statistics']['duration_human']
-                ];
-            }, $routes)
+            'total_points_processed' => $locations->count(),
         ]);
 
         return $routes;
