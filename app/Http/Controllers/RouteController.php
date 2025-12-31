@@ -327,16 +327,17 @@ class RouteController extends Controller
                     'index' => $index
                 ]);
             } else {
-                // ✅ Calcular diferencia de tiempo (en segundos)
-                $timeDiff = $currentTimestamp->diffInSeconds($previousTimestamp);
+                // 🔥 SOLUCIÓN: Usar abs() para obtener valor absoluto
+                $timeDiff = abs($currentTimestamp->diffInSeconds($previousTimestamp));
 
-                // 🔥 DEBUG: Mostrar cada 10 puntos para no saturar logs
-                if ($index % 10 === 0) {
+                // 🔥 DEBUG: Mostrar cada 100 puntos
+                if ($index % 100 === 0) {
                     Log::info("⏱️ Analizando punto #{$index}", [
                         'current_time' => $currentTimestamp->toISOString(),
                         'previous_time' => $previousTimestamp->toISOString(),
                         'time_diff_seconds' => $timeDiff,
                         'max_allowed_seconds' => $maxIntervalSeconds,
+                        'current_route_id' => $currentRoute['id'],
                         'current_route_points' => count($currentRoute['points']),
                     ]);
                 }
@@ -353,6 +354,7 @@ class RouteController extends Controller
                             'start' => $currentRoute['start_time'],
                             'end' => $currentRoute['end_time'],
                             'duration' => $currentRoute['statistics']['duration_human'],
+                            'distance_km' => $currentRoute['statistics']['distance'],
                             'gap_seconds' => $timeDiff,
                             'reason' => "Intervalo de {$timeDiff}s excede límite de {$maxIntervalSeconds}s"
                         ]);
@@ -369,7 +371,8 @@ class RouteController extends Controller
 
                     Log::info("🆕 Ruta #{$routeIndex} iniciada (por intervalo)", [
                         'timestamp' => $currentTimestamp->toISOString(),
-                        'gap_from_previous' => $timeDiff . 's',
+                        'gap_from_previous' => $timeDiff . 's (' . round($timeDiff / 60, 1) . ' minutos)',
+                        'previous_route_end' => $previousTimestamp->toISOString(),
                     ]);
                 } else {
                     // Agregar punto a la ruta actual
@@ -391,12 +394,21 @@ class RouteController extends Controller
                 'start' => $currentRoute['start_time'],
                 'end' => $currentRoute['end_time'],
                 'duration' => $currentRoute['statistics']['duration_human'],
+                'distance_km' => $currentRoute['statistics']['distance'],
             ]);
         }
 
         Log::info('🏁 Detección completada', [
             'total_routes' => count($routes),
             'total_points_processed' => $locations->count(),
+            'routes_summary' => array_map(function ($r) {
+                return [
+                    'id' => $r['id'],
+                    'points' => $r['statistics']['total_points'],
+                    'distance_km' => $r['statistics']['distance'],
+                    'duration' => $r['statistics']['duration_human'],
+                ];
+            }, $routes)
         ]);
 
         return $routes;
