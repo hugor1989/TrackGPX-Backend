@@ -4,9 +4,10 @@
 namespace App\Listeners;
 
 use App\Events\SubscriptionPaid;
+use App\Models\Notification;
 use App\Services\OneSignalService;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Log;
 
 class SendSubscriptionPaidNotification implements ShouldQueue
 {
@@ -23,10 +24,7 @@ class SendSubscriptionPaidNotification implements ShouldQueue
             $subscription = $event->subscription;
             $customer = $subscription->customer;
 
-            if (!$customer || !$customer->expo_push_token) {
-                Log::warning('No se puede enviar notificación de pago - sin customer o token', [
-                    'subscription_id' => $subscription->id,
-                ]);
+            if (!$customer) {
                 return;
             }
 
@@ -44,37 +42,47 @@ class SendSubscriptionPaidNotification implements ShouldQueue
             
             $message .= "Válida hasta: " . $subscription->end_date->format('d/m/Y');
 
-            Log::info('📤 Enviando notificación de pago confirmado', [
-                'customer_id' => $customer->id,
+            $notificationData = [
                 'subscription_id' => $subscription->id,
-                'external_id' => $customer->expo_push_token,
+                'plan_id' => $plan->id,
+                'plan_name' => $plan->name,
+                'device_id' => $device?->id,
+                'start_date' => $subscription->start_date->toDateString(),
+                'end_date' => $subscription->end_date->toDateString(),
+            ];
+
+            // ✅ GUARDAR EN BASE DE DATOS
+            $notification = Notification::create([
+                'customer_id' => $customer->id,
+                'event_id' => null,
+                'type' => 'subscription_paid',
+                'title' => $title,
+                'message' => $message,
+                'data' => $notificationData,
+                'is_read' => false,
+                'push_sent' => false,
             ]);
 
-            $result = $this->oneSignal->sendToUser(
-                $customer->expo_push_token,
-                $title,
-                $message,
-                [
-                    'type' => 'subscription_paid',
-                    'subscription_id' => $subscription->id,
-                    'plan_id' => $plan->id,
-                    'plan_name' => $plan->name,
-                    'device_id' => $device?->id,
-                    'start_date' => $subscription->start_date->toDateString(),
-                    'end_date' => $subscription->end_date->toDateString(),
-                ]
-            );
+            // ✅ ENVIAR PUSH NOTIFICATION
+            if ($customer->expo_push_token) {
+                $result = $this->oneSignal->sendToUser(
+                    $customer->expo_push_token,
+                    $title,
+                    $message,
+                    array_merge($notificationData, [
+                        'type' => 'subscription_paid',
+                        'notification_id' => $notification->id,
+                    ])
+                );
 
-            if ($result) {
-                Log::info('✅ Notificación de pago enviada exitosamente');
-            } else {
-                Log::error('❌ Falló el envío de notificación de pago');
+                if ($result) {
+                    $notification->markAsPushSent();
+                }
             }
 
         } catch (\Exception $e) {
             Log::error('❌ Excepción en SendSubscriptionPaidNotification', [
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
             ]);
         }
     }
