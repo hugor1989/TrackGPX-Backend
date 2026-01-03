@@ -16,6 +16,7 @@ use App\Http\Controllers\DeviceConfigurationController;
 use App\Http\Controllers\GeofenceController;
 use App\Http\Controllers\RouteController;
 use App\Http\Controllers\PushTokenController;
+USE App\Http\Controllers\NotificationController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -171,6 +172,16 @@ Route::middleware('auth:customer')->group(function () {
     // 4. Exportar ruta
     // POST: /api/devices/{deviceId}/route/export
     Route::post('devices/{deviceId}/route/export', [RouteController::class, 'exportRoute']);
+
+    Route::prefix('notifications')->group(function () {
+        Route::get('/get-all', [NotificationController::class, 'index']);
+        Route::get('/unread', [NotificationController::class, 'unread']);
+        Route::get('/unread-count', [NotificationController::class, 'unreadCount']);
+        Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+        Route::post('/mark-all-read', [NotificationController::class, 'markAllAsRead']);
+        Route::delete('/delete/{id}', [NotificationController::class, 'destroy']);
+        Route::delete('/delete-all', [NotificationController::class, 'destroyAll']);
+    });
 });
 
 #endregion
