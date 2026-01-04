@@ -16,7 +16,8 @@ use App\Http\Controllers\DeviceConfigurationController;
 use App\Http\Controllers\GeofenceController;
 use App\Http\Controllers\RouteController;
 use App\Http\Controllers\PushTokenController;
-USE App\Http\Controllers\NotificationController;
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\DashboardController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -181,6 +182,13 @@ Route::middleware('auth:customer')->group(function () {
         Route::post('/mark-all-read', [NotificationController::class, 'markAllAsRead']);
         Route::delete('/delete/{id}', [NotificationController::class, 'destroy']);
         Route::delete('/delete-all', [NotificationController::class, 'destroyAll']);
+    });
+
+    // Dashboard
+    Route::prefix('dashboard')->group(function () {
+        Route::get('/statistics', [DashboardController::class, 'getStatistics']);
+        Route::get('/devices', [DashboardController::class, 'getDevices']);
+        Route::get('/device/{deviceId}/details', [DashboardController::class, 'getDeviceDetails']);
     });
 });
 
