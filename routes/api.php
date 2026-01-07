@@ -102,6 +102,9 @@ Route::post('CustomerUser/register', [CustomerAuthController::class, 'customerRe
 Route::post('customer/login', [CustomerAuthController::class, 'customerLoginNuevo']);
 Route::post('verify-otp', [CustomerAuthController::class, 'verifyOtp']);
 
+Route::post('customer/recovery/send', [CustomerAuthController::class, 'sendRecoveryOtp']);
+Route::post('customer/recovery/reset', [CustomerAuthController::class, 'resetPassword']);
+
 // Rutas protegidas para clientes
 Route::middleware('auth:customer')->group(function () {
     Route::post('customer/logout', [CustomerAuthController::class, 'customerLogout']);

@@ -70,5 +70,6 @@ class VerificationCode extends Model
         return $query->where('customer_id', $customerId);
     }
 
+    
     public $timestamps = true;
 }
