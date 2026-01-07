@@ -228,8 +228,6 @@ class CustomerAuthController extends AppBaseController
         }
     }
 
-
-
     public function customerLoginNuevo(Request $request)
     {
         $request->validate([
@@ -257,26 +255,6 @@ class CustomerAuthController extends AppBaseController
         ], 'Login de cliente correcto', 200);
     }
 
-
-
-  /*   public function customerLogin(Request $request)
-    {
-        $request->validate([
-            'email'    => 'required|email',
-            'password' => 'required'
-        ]);
-
-        $customer = Customer::where('email', $request->email)->first();
-
-        if (!$customer || !Hash::check($request->password, $customer->password)) {
-            return $this->error('Credenciales incorrectas', 401);
-        }
-
-        $token = $customer->createToken('customer_token', ['customer'])->plainTextToken;
-
-        return $this->respond(true, $token, $customer, 'Login de cliente correcto');
-    } */
-
     public function customerLogout(Request $request)
     {
         $customer = $request->user();
@@ -288,5 +266,109 @@ class CustomerAuthController extends AppBaseController
         $customer->currentAccessToken()->delete();
 
         return $this->success(null, 'Sesión cerrada correctamente.');
+    }
+
+    /**
+     * 1. SOLICITAR RECUPERACIÓN: Genera OTP y lo envía por WhatsApp
+     */
+    /**
+     * Envía OTP de recuperación buscando por TELÉFONO
+     */
+    public function sendRecoveryOtp(Request $request)
+    {
+        // 1. Validar que envíen el teléfono y que exista en la tabla customers
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string|exists:customers,phone',
+        ]);
+
+        if ($validator->fails()) {
+            // Si el teléfono no existe, devolvemos error 404 o 422
+            return $this->respond(false, null, null, 'El número de teléfono no está registrado.', 404);
+        }
+
+        try {
+            // 2. Buscar al cliente por teléfono
+            $customer = Customer::where('phone', $request->phone)->first();
+
+            // 3. Generar el código OTP
+            $verificationCode = $this->generateVerificationCode($customer);
+
+            Log::info('🔑 Recovery OTP generado (Phone)', [
+                'customer_id' => $customer->id,
+                'phone' => $customer->phone,
+                'otp_code' => $verificationCode->code
+            ]);
+
+            // 4. Enviar mensaje por WhatsApp
+            $message = "Hola {$customer->name}, tu código de recuperación es: " . $verificationCode->code;
+            
+            try {
+                $this->whatapiService->sendMessage($customer->phone, $message);
+                Log::info('📤 WhatsApp enviado', ['phone' => $customer->phone]);
+            } catch (\Exception $e) {
+                Log::error('❌ Error API WhatsApp', ['error' => $e->getMessage()]);
+                return $this->respond(false, null, null, 'Error al enviar el mensaje. Intente más tarde.', 500);
+            }
+
+            return $this->respond(true, null, [
+                'phone' => $customer->phone
+            ], 'Código enviado correctamente a tu WhatsApp.', 200);
+
+        } catch (\Exception $e) {
+            Log::error('❌ Error en sendRecoveryOtp', ['error' => $e->getMessage()]);
+            return $this->respond(false, null, null, 'Ocurrió un error inesperado.', 500);
+        }
+    }
+
+    /**
+     * 2. CAMBIAR CONTRASEÑA: Valida el OTP y actualiza el password
+     */
+    public function resetPassword(Request $request)
+    {
+        // 1. Validar teléfono, código y password
+        $validator = Validator::make($request->all(), [
+            'phone'    => 'required|string|exists:customers,phone',
+            'code'     => 'required|string|size:5', // Asumiendo que tu código es de 5 dígitos como en generateVerificationCode
+            'password' => 'required|string|min:6|confirmed', // 'confirmed' espera field 'password_confirmation'
+        ]);
+
+        if ($validator->fails()) {
+            return $this->respond(false, null, null, $validator->errors()->first(), 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            // 2. Buscar cliente por teléfono
+            $customer = Customer::where('phone', $request->phone)->first();
+
+            // 3. Verificar código válido para ese cliente
+            $verificationCode = VerificationCode::forCustomer($customer->id)
+                ->where('code', $request->code)
+                ->valid() 
+                ->first();
+
+            if (!$verificationCode) {
+                return $this->respond(false, null, null, 'El código es inválido o ha expirado.', 400);
+            }
+
+            // 4. Actualizar contraseña
+            $customer->password = Hash::make($request->password);
+            $customer->save();
+
+            // 5. Marcar código como usado y limpiar tokens
+            $verificationCode->markAsUsed();
+            $customer->tokens()->delete(); // Cerrar sesiones anteriores por seguridad
+
+            DB::commit();
+            Log::info('✅ Contraseña actualizada vía Phone', ['customer_id' => $customer->id]);
+
+            return $this->respond(true, null, null, 'Contraseña actualizada correctamente.', 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('❌ Error en resetPassword', ['error' => $e->getMessage()]);
+            return $this->respond(false, null, null, 'Error al actualizar la contraseña.', 500);
+        }
     }
 }
