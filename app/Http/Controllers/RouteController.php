@@ -842,140 +842,6 @@ class RouteController extends Controller
      */
     public function getAlarmsReport(Request $request, $deviceId)
     {
-        $validator = Validator::make($request->all(), [
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'alarm_type' => 'nullable|string',
-            'unread_only' => 'nullable|boolean',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Datos inválidos',
-                'errors' => $validator->errors()
-            ], 400);
-        }
-
-        try {
-            // 1. CARGA INTELIGENTE (Eager Loading): 
-            // Traemos el dispositivo Y su configuración en una sola llamada eficiente.
-            $device = Device::with('configuration')->findOrFail($deviceId);
-
-            // 2. RESOLUCIÓN DEL NOMBRE:
-            // Intentamos obtener custom_name. Si es null, usamos el modelo o el IMEI.
-            $deviceName = $device->configuration->custom_name
-                ?? $device->model
-                ?? 'Dispositivo ' . $device->imei;
-
-            $startDate = Carbon::parse($request->start_date)->startOfDay();
-            $endDate = Carbon::parse($request->end_date)->endOfDay();
-
-            // 3. CONSULTA DE NOTIFICACIONES (Query Base):
-            // Ya no necesitamos el JOIN a devices porque ya sabemos cuál es el dispositivo ($device->id).
-            // Asumimos que la tabla 'notifications' tiene 'device_id'.
-            // Si tu tabla notifications usa 'imei', cambia 'device_id' por 'imei' y $device->id por $device->imei.
-            $query = DB::table('notifications')
-                ->where('device_id', $device->id)
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->select('notifications.*') // Solo necesitamos los datos de la notificación
-                ->orderBy('created_at', 'DESC');
-
-            // Filtrar por tipo de alarma
-            if ($request->alarm_type) {
-                $query->where('type', $request->alarm_type);
-            }
-
-            // Solo no leídas
-            if ($request->boolean('unread_only')) {
-                $query->where('is_read', 0);
-            }
-
-            $notifications = $query->get();
-
-            // Agrupar por tipo (Lógica mantenida)
-            $groupedByType = $notifications->groupBy('type')->map(function ($items, $type) {
-                return [
-                    'type' => $type,
-                    'count' => $items->count(),
-                    'unread_count' => $items->where('is_read', 0)->count(),
-                    'last_occurrence' => $items->first()->created_at,
-                ];
-            })->values();
-
-            // Agrupar por día (Lógica mantenida)
-            $groupedByDate = $notifications->groupBy(function ($item) {
-                return Carbon::parse($item->created_at)->format('Y-m-d');
-            })->map(function ($items, $date) {
-                return [
-                    'date' => $date,
-                    'count' => $items->count(),
-                    'types' => $items->groupBy('type')->map(function ($typeItems) {
-                        return $typeItems->count();
-                    }),
-                ];
-            })->values();
-
-            return response()->json([
-                'success' => true,
-                'device' => [
-                    'id' => $device->id,
-                    // AQUÍ USAMOS EL NOMBRE QUE OBTUVIMOS DE LA CONFIGURACIÓN
-                    'name' => $deviceName,
-                    'imei' => $device->imei
-                ],
-                'date_range' => [
-                    'start' => $startDate->toISOString(),
-                    'end' => $endDate->toISOString(),
-                ],
-                'summary' => [
-                    'total_alarms' => $notifications->count(),
-                    'unread_alarms' => $notifications->where('is_read', 0)->count(),
-                    'read_alarms' => $notifications->where('is_read', 1)->count(),
-                    'by_type' => $groupedByType,
-                    'by_date' => $groupedByDate,
-                ],
-                'alarms' => $notifications->map(function ($notification) {
-                    // Decodificar JSON de data si existe y es string
-                    $data = is_string($notification->data) ? json_decode($notification->data, true) : $notification->data;
-
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'title' => $notification->title ?? 'Alarma', // Fallback por si es null
-                        'message' => $notification->message,
-                        'timestamp' => $notification->created_at,
-                        'is_read' => (bool)$notification->is_read,
-                        'read_at' => $notification->read_at,
-                        'location' => [
-                            'lat' => $data['latitude'] ?? null,
-                            'lon' => $data['longitude'] ?? null,
-                        ],
-                        'speed' => $data['speed'] ?? null,
-                        'battery' => $data['battery_level'] ?? null,
-                        'data' => $data,
-                    ];
-                })->values(),
-                'message' => $notifications->count() . ' alarmas encontradas'
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Error en getAlarmsReport:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al obtener reporte: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * 📊 Reporte de Actividad Diaria
-     */
-    public function getAlarmsReport(Request $request, $deviceId)
-    {
         // 1. Validaciones
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
@@ -1073,6 +939,184 @@ class RouteController extends Controller
         } catch (\Exception $e) {
             Log::error('Error reporte alarmas:', ['msg' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 Reporte de Actividad Diaria
+     */
+    public function getDailyActivityReport(Request $request, $deviceId)
+    {
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Datos inválidos',
+                'errors' => $validator->errors()
+            ], 400);
+        }
+
+        try {
+            $device = Device::findOrFail($deviceId);
+
+            $startDate = Carbon::parse($request->start_date)->startOfDay();
+            $endDate = Carbon::parse($request->end_date)->endOfDay();
+
+            // Obtener todas las ubicaciones
+            $locations = Location::where('device_id', $device->id)
+                ->whereBetween('timestamp', [$startDate, $endDate])
+                ->where('latitude', '!=', 0)
+                ->where('longitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC')
+                ->get();
+
+            if ($locations->isEmpty()) {
+                return response()->json([
+                    'success' => true,
+                    'daily_activity' => [],
+                    'message' => 'No hay datos en el rango de fechas'
+                ]);
+            }
+
+            // Agrupar por día
+            $dailyData = $locations->groupBy(function ($location) {
+                return Carbon::parse($location->timestamp)->format('Y-m-d');
+            });
+
+            $dailyActivity = [];
+
+            foreach ($dailyData as $date => $dayLocations) {
+                // Detectar rutas del día
+                $dayRoutes = $this->detectMultipleRoutes($dayLocations, 5, $device);
+
+                // Calcular tiempo en movimiento
+                $movingTime = 0;
+                $totalDistance = 0;
+
+                foreach ($dayRoutes as $route) {
+                    $movingTime += $route['statistics']['duration'];
+                    $totalDistance += $route['statistics']['distance'];
+                }
+
+                // Obtener alarmas del día
+                $dayStart = Carbon::parse($date)->startOfDay();
+                $dayEnd = Carbon::parse($date)->endOfDay();
+
+                $alarmsCount = DB::table('notifications')
+                    ->join('devices', 'notifications.customer_id', '=', 'devices.customer_id')
+                    ->where('devices.id', $device->id)
+                    ->whereBetween('notifications.created_at', [$dayStart, $dayEnd])
+                    ->count();
+
+                $alarmsByType = DB::table('notifications')
+                    ->join('devices', 'notifications.customer_id', '=', 'devices.customer_id')
+                    ->where('devices.id', $device->id)
+                    ->whereBetween('notifications.created_at', [$dayStart, $dayEnd])
+                    ->select('type', DB::raw('COUNT(*) as count'))
+                    ->groupBy('type')
+                    ->get()
+                    ->pluck('count', 'type');
+
+                // Estadísticas del día
+                $speeds = $dayLocations->pluck('speed')->filter()->values();
+                $batteries = $dayLocations->pluck('battery_level')->filter()->values();
+
+                $dailyActivity[] = [
+                    'date' => $date,
+                    'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
+                    'summary' => [
+                        'total_routes' => count($dayRoutes),
+                        'total_distance_km' => round($totalDistance, 2),
+                        'total_moving_time' => $movingTime,
+                        'total_moving_time_human' => $this->secondsToHuman($movingTime),
+                        'total_points' => $dayLocations->count(),
+                        'first_activity' => $dayLocations->first()->timestamp->format('H:i:s'),
+                        'last_activity' => $dayLocations->last()->timestamp->format('H:i:s'),
+                    ],
+                    'speed_stats' => [
+                        'avg' => $speeds->count() > 0 ? round($speeds->avg(), 2) : 0,
+                        'max' => $speeds->count() > 0 ? round($speeds->max(), 2) : 0,
+                        'min' => $speeds->count() > 0 ? round($speeds->min(), 2) : 0,
+                    ],
+                    'battery_stats' => [
+                        'avg' => $batteries->count() > 0 ? round($batteries->avg(), 1) : null,
+                        'max' => $batteries->count() > 0 ? $batteries->max() : null,
+                        'min' => $batteries->count() > 0 ? $batteries->min() : null,
+                        'start' => $dayLocations->first()->battery_level,
+                        'end' => $dayLocations->last()->battery_level,
+                        'consumption' => $dayLocations->first()->battery_level - $dayLocations->last()->battery_level,
+                    ],
+                    'alarms' => [
+                        'total' => $alarmsCount,
+                        'by_type' => $alarmsByType,
+                    ],
+                    'routes' => array_map(function ($route) {
+                        return [
+                            'id' => $route['id'],
+                            'start_time' => $route['start_time'],
+                            'end_time' => $route['end_time'],
+                            'distance_km' => $route['statistics']['distance'],
+                            'duration' => $route['statistics']['duration_human'],
+                            'avg_speed' => $route['statistics']['avg_speed'],
+                            'max_speed' => $route['statistics']['max_speed'],
+                            'points_count' => $route['statistics']['total_points'],
+                        ];
+                    }, $dayRoutes),
+                ];
+            }
+
+            // Calcular totales del período
+            $totalRoutes = array_sum(array_map(function ($day) {
+                return $day['summary']['total_routes'];
+            }, $dailyActivity));
+
+            $totalStats = [
+                'total_days' => count($dailyActivity),
+                'total_routes' => $totalRoutes,
+                'total_distance_km' => round(array_sum(array_map(function ($day) {
+                    return $day['summary']['total_distance_km'];
+                }, $dailyActivity)), 2),
+                'total_moving_time' => array_sum(array_map(function ($day) {
+                    return $day['summary']['total_moving_time'];
+                }, $dailyActivity)),
+                'total_alarms' => array_sum(array_map(function ($day) {
+                    return $day['alarms']['total'];
+                }, $dailyActivity)),
+                'avg_distance_per_day' => count($dailyActivity) > 0 ? round(array_sum(array_map(function ($day) {
+                    return $day['summary']['total_distance_km'];
+                }, $dailyActivity)) / count($dailyActivity), 2) : 0,
+            ];
+
+            $totalStats['total_moving_time_human'] = $this->secondsToHuman($totalStats['total_moving_time']);
+
+            return response()->json([
+                'success' => true,
+                'device' => [
+                    'id' => $device->id,
+                    'name' => $device->name,
+                ],
+                'date_range' => [
+                    'start' => $startDate->toISOString(),
+                    'end' => $endDate->toISOString(),
+                ],
+                'period_summary' => $totalStats,
+                'daily_activity' => $dailyActivity,
+                'message' => 'Reporte generado correctamente'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error en getDailyActivityReport:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener reporte: ' . $e->getMessage()
+            ], 500);
         }
     }
 }
