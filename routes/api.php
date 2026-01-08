@@ -172,7 +172,11 @@ Route::middleware('auth:customer')->group(function () {
     // 3. Obtener ruta por fechas (CON parámetros GET)
     // GET: /api/devices/{deviceId}/route?start_date=...&end_date=...
     Route::post('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
-    
+
+    //Reportes
+    Route::get('devices/{deviceId}/reports/alarms', [RouteController::class, 'getAlarmsReport']);
+    Route::get('devices/{deviceId}/reports/daily-activity', [RouteController::class, 'getDailyActivityReport']);
+
     // 4. Exportar ruta
     // POST: /api/devices/{deviceId}/route/export
     Route::post('devices/{deviceId}/route/export', [RouteController::class, 'exportRoute']);
