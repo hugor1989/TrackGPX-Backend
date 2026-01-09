@@ -123,19 +123,22 @@ class AdminDashboardController extends AppBaseController
         // 6️⃣ COMPARATIVA SEMESTRAL (NUEVO)
         // =============================
         $semesterRevenue = Payment::selectRaw('
-            CONCAT("S", IF(MONTH(paid_at) <= 6, 1, 2), " ", YEAR(paid_at)) as semester,
-            SUM(amount) as revenue,
-            COUNT(DISTINCT subscription_id) as subscriptions
+        YEAR(paid_at) as year,
+        IF(MONTH(paid_at) <= 6, 1, 2) as semester_number,
+        CONCAT("S", IF(MONTH(paid_at) <= 6, 1, 2), " ", YEAR(paid_at)) as semester,
+        SUM(amount) as revenue,
+        COUNT(DISTINCT subscription_id) as subscriptions
         ')
-            ->where('status', 'approved')
-            ->groupBy('semester')
-            ->orderByRaw('YEAR(paid_at), MONTH(paid_at)')
-            ->get()
-            ->map(fn($row) => [
-                'semester' => $row->semester,
-                'revenue' => (float) $row->revenue,
-                'subscriptions' => (int) $row->subscriptions,
-            ]);
+        ->where('status', 'approved')
+        ->groupBy('year', 'semester_number')
+        ->orderBy('year')
+        ->orderBy('semester_number')
+        ->get()
+        ->map(fn ($row) => [
+            'semester' => $row->semester,
+            'revenue' => (float) $row->revenue,
+            'subscriptions' => (int) $row->subscriptions,
+        ]);
 
         // =============================
         // RESPONSE FINAL
