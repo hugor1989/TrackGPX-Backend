@@ -125,7 +125,6 @@ class AdminDashboardController extends AppBaseController
         $semesterRevenue = Payment::selectRaw('
         YEAR(paid_at) as year,
         IF(MONTH(paid_at) <= 6, 1, 2) as semester_number,
-        CONCAT("S", IF(MONTH(paid_at) <= 6, 1, 2), " ", YEAR(paid_at)) as semester,
         SUM(amount) as revenue,
         COUNT(DISTINCT subscription_id) as subscriptions
         ')
@@ -135,7 +134,7 @@ class AdminDashboardController extends AppBaseController
         ->orderBy('semester_number')
         ->get()
         ->map(fn ($row) => [
-            'semester' => $row->semester,
+            'semester' => 'S' . $row->semester_number . ' ' . $row->year,
             'revenue' => (float) $row->revenue,
             'subscriptions' => (int) $row->subscriptions,
         ]);
