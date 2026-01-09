@@ -139,18 +139,32 @@ class SimCardController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'sim_cards' => 'required|array',
+
             'sim_cards.*.sim_id' => 'required|string',
             'sim_cards.*.iccid' => 'required|string',
             'sim_cards.*.carrier' => 'required|string',
-            'sim_cards.*.status' => 'required|in:active,inactive,suspended',
+
+            'sim_cards.*.phone_number' => 'nullable|string',
+            'sim_cards.*.status' => 'required|string', // ← ya NO validamos aquí el enum
             'sim_cards.*.imsi' => 'nullable|string',
+            'sim_cards.*.subscription_type' => 'nullable|string',
+
+            'sim_cards.*.data_usage' => 'nullable|numeric',
+            'sim_cards.*.data_limit' => 'nullable|numeric',
+
+            'sim_cards.*.voice_usage' => 'nullable|string',
+            'sim_cards.*.sms_usage' => 'nullable|string',
+
             'sim_cards.*.plan_name' => 'nullable|string',
             'sim_cards.*.client_name' => 'nullable|string',
             'sim_cards.*.device_brand' => 'nullable|string',
-            'sim_cards.*.data_usage' => 'nullable|numeric',
-            'sim_cards.*.data_limit' => 'nullable|numeric',
-            'sim_cards.*.voice_usage' => 'nullable|string',
-            'sim_cards.*.sms_usage' => 'nullable|string',
+
+            'sim_cards.*.monthly_fee' => 'nullable|numeric',
+            'sim_cards.*.activation_date' => 'nullable|date',
+            'sim_cards.*.expiration_date' => 'nullable|date',
+
+            'sim_cards.*.notes' => 'nullable|string',
+            'sim_cards.*.apn' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -160,89 +174,108 @@ class SimCardController extends Controller
             ], 422);
         }
 
-        DB::beginTransaction();
+        try {
+            DB::beginTransaction();
 
-        $importedCount = 0;
-        $errors = [];
+            $importedCount = 0;
+            $errors = [];
 
-        foreach ($request->sim_cards as $index => $raw) {
-            try {
+            foreach ($request->sim_cards as $index => $raw) {
 
-                // =============================
-                // NORMALIZAR ESTADO
-                // =============================
-                $statusMap = [
-                    'pre-activada' => 'inactive',
-                    'activada'     => 'active',
-                    'suspendida'   => 'suspended',
-                ];
+                try {
+                    // 🔹 Normalizar estado
+                    $status = $this->normalizeStatus($raw['status'] ?? null);
 
-                $statusKey = strtolower(trim($raw['status']));
-                $status = $statusMap[$statusKey] ?? null;
-
-                if (!$status) {
-                    $errors[] = "Estado inválido en fila {$index}";
-                    continue;
-                }
-
-                // =============================
-                // PARSEAR CONSUMO DATOS
-                // "0% - 20,00 MB"
-                // =============================
-                $dataLimit = null;
-                if (!empty($raw['data_limit'])) {
-                    preg_match('/([\d,.]+)\s*MB/i', $raw['data_limit'], $matches);
-                    if (isset($matches[1])) {
-                        $dataLimit = (float) str_replace(',', '.', $matches[1]);
+                    if (!$status) {
+                        $errors[] = "Estado inválido '{$raw['status']}' en fila {$index}";
+                        continue;
                     }
+
+                    // 🔹 Validar duplicados
+                    if (SimCard::where('iccid', $raw['iccid'])->exists()) {
+                        $errors[] = "SIM con ICCID {$raw['iccid']} ya existe (fila {$index})";
+                        continue;
+                    }
+
+                    if (SimCard::where('sim_id', $raw['sim_id'])->exists()) {
+                        $errors[] = "SIM con ID {$raw['sim_id']} ya existe (fila {$index})";
+                        continue;
+                    }
+
+                    // 🔹 Crear SIM
+                    SimCard::create([
+                        'sim_id'            => trim($raw['sim_id']),
+                        'iccid'             => trim($raw['iccid']),
+                        'carrier'           => trim($raw['carrier']),
+                        'phone_number'      => $raw['phone_number'] ?? null,
+
+                        'status'            => $status, // 👈 ENUM SEGURO
+
+                        'imsi'              => $raw['imsi'] ?? null,
+                        'subscription_type' => $raw['subscription_type'] ?? null,
+
+                        'data_usage'        => $raw['data_usage'] ?? null,
+                        'data_limit'        => $raw['data_limit'] ?? null,
+
+                        'voice_usage'       => $raw['voice_usage'] ?? null,
+                        'sms_usage'         => $raw['sms_usage'] ?? null,
+
+                        'plan_name'         => $raw['plan_name'] ?? null,
+                        'client_name'       => $raw['client_name'] ?? null,
+                        'device_brand'      => $raw['device_brand'] ?? null,
+
+                        'monthly_fee'       => $raw['monthly_fee'] ?? null,
+                        'activation_date'   => $raw['activation_date'] ?? null,
+                        'expiration_date'   => $raw['expiration_date'] ?? null,
+
+                        'notes'             => $raw['notes'] ?? null,
+                        'apn'               => $raw['apn'] ?? null,
+                    ]);
+
+                    $importedCount++;
+                } catch (\Throwable $e) {
+                    $errors[] = "Error en fila {$index}: " . $e->getMessage();
                 }
-
-                // =============================
-                // PREVENIR DUPLICADOS
-                // =============================
-                if (SimCard::where('iccid', $raw['iccid'])->exists()) {
-                    $errors[] = "ICCID duplicado {$raw['iccid']}";
-                    continue;
-                }
-
-                if (SimCard::where('sim_id', $raw['sim_id'])->exists()) {
-                    $errors[] = "SIM ID duplicado {$raw['sim_id']}";
-                    continue;
-                }
-
-                // =============================
-                // CREAR SIM
-                // =============================
-                SimCard::create([
-                    'sim_id'        => $raw['sim_id'],
-                    'iccid'         => $raw['iccid'],
-                    'imsi'          => $raw['imsi'] ?? null,
-                    'carrier'       => $raw['carrier'],
-                    'status'        => $status,
-                    'plan_name'     => $raw['plan_name'] ?? null,
-                    'client_name'   => $raw['client_name'] ?? null,
-                    'device_brand'  => $raw['device_brand'] ?? null,
-                    'data_usage'    => 0,
-                    'data_limit'    => $dataLimit,
-                    'voice_usage'   => $raw['voice_usage'] ?? null,
-                    'sms_usage'     => $raw['sms_usage'] ?? null,
-                ]);
-
-                $importedCount++;
-            } catch (\Throwable $e) {
-                $errors[] = "Fila {$index}: {$e->getMessage()}";
             }
+
+            DB::commit();
+
+            return response()->json([
+                'message' => "{$importedCount} SIM cards importadas correctamente",
+                'imported_count' => $importedCount,
+                'errors' => $errors
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'error' => 'Error en la importación',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        DB::commit();
-
-        return response()->json([
-            'message' => "{$importedCount} SIM cards importadas correctamente",
-            'imported_count' => $importedCount,
-            'errors' => $errors
-        ]);
     }
 
+
+    private function normalizeStatus(?string $status): ?string
+    {
+        if (!$status) {
+            return null;
+        }
+
+        // Normalizar texto
+        $clean = strtolower($status);
+        $clean = preg_replace('/[\r\n\t]+/', '', $clean); // quita saltos invisibles
+        $clean = preg_replace('/\s+/', ' ', $clean);      // espacios múltiples
+        $clean = trim($clean);
+
+        return match (true) {
+            str_contains($clean, 'pre')      => 'inactive',   // Pre-Activada
+            str_contains($clean, 'inact')    => 'inactive',
+            str_contains($clean, 'activ')    => 'active',     // Activada
+            str_contains($clean, 'suspend')  => 'suspended',  // Suspendida
+            default                          => null,
+        };
+    }
 
     /**
      * Obtener una SIM card específica
