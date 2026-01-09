@@ -35,7 +35,7 @@ class AdminDashboardController extends AppBaseController
             ->whereBetween('updated_at', [$startMonth, $endMonth])
             ->count();
 
-        $revenueThisMonth = Payment::where('status', 'paid')
+        $revenueThisMonth = Payment::where('status', 'approved')
             ->whereBetween('paid_at', [$startMonth, $endMonth])
             ->sum('amount');
 
@@ -64,7 +64,7 @@ class AdminDashboardController extends AppBaseController
                 SUM(amount) as revenue,
                 COUNT(DISTINCT subscription_id) as subscriptions
             ')
-            ->where('status', 'paid')
+            ->where('status', 'approved')
             ->groupBy('month')
             ->orderBy('month')
             ->get()
@@ -99,7 +99,7 @@ class AdminDashboardController extends AppBaseController
                 YEAR(paid_at) as year,
                 SUM(amount) as revenue
             ')
-            ->where('status', 'paid')
+            ->where('status', 'approved')
             ->groupBy('year')
             ->orderBy('year')
             ->get()
