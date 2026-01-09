@@ -5,13 +5,14 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
-
+use Illuminate\Support\Facades\DB;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\Payment;
 use App\Models\Plan;
+use Faker\Provider\Base;
 
-class AdminDashboardController extends Controller
+class AdminDashboardController extends AppBaseController
 {
     public function index(Request $request)
     {
@@ -110,18 +111,21 @@ class AdminDashboardController extends Controller
         // =============================
         // RESPONSE FINAL
         // =============================
-        return response()->json([
-            'kpis' => [
-                'subscriptions_this_month' => $subscriptionsThisMonth,
-                'new_customers' => $newCustomers,
-                'cancellations' => $cancellations,
-                'revenue_this_month' => (float) $revenueThisMonth,
-                'net_growth' => $netGrowth,
-            ],
-            'plans_distribution' => $plansDistribution,
-            'monthly_revenue' => $monthlyRevenue,
-            'growth' => $growth,
-            'yearly_revenue' => $yearlyRevenue,
-        ]);
+        return $this->success([
+                'kpis' => [
+                    'subscriptions_this_month' => $subscriptionsThisMonth,
+                    'new_customers' => $newCustomers,
+                    'cancellations' => $cancellations,
+                    'revenue_this_month' => $revenueThisMonth,
+                    'net_growth' => $netGrowth,
+                ],
+                'charts' => [
+                    'monthly_revenue' => $monthlyRevenue,
+                    'growth' => $growth,
+                    'yearly_revenue' => $yearlyRevenue,
+                    'plans_distribution' => $plansDistribution,
+                ]
+            ], 'Dashboard metrics');
+        
     }
 }
