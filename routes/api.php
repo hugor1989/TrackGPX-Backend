@@ -18,6 +18,7 @@ use App\Http\Controllers\RouteController;
 use App\Http\Controllers\PushTokenController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\AdminDashboardController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -55,6 +56,8 @@ Route::post('user/register-user', [AuthController::class, 'registerUser']);
 
 
 Route::middleware('auth:user')->group(function () {
+
+    Route::get('admin/dashboard', [AdminDashboardController::class, 'index']);
 
     Route::post('user/session-close', [AuthController::class, 'userLogout']);
     Route::get('user/profile', [UserController::class, 'profile']); // ✅ perfil user
