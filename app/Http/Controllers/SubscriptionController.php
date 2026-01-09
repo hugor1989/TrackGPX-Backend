@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Subscription;
 use App\Models\Plan;
+use App\Models\Payment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -324,7 +325,7 @@ class SubscriptionController extends AppBaseController
         ]);
     }
     // app/Http/Controllers/SubscriptionController.php
-    public function pay(Request $request)
+    /*  public function pay(Request $request)
     {
         $request->validate([
             'subscription_id' => 'required|integer|exists:subscriptions,id',
@@ -411,6 +412,125 @@ class SubscriptionController extends AppBaseController
                 'subscription_id' => $subscription->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error procesando el pago: ' . $e->getMessage()
+            ], 500);
+        }
+    } */
+
+    public function pay(Request $request)
+    {
+        $request->validate([
+            'subscription_id' => 'required|integer|exists:subscriptions,id',
+            'card_id' => 'required|string',
+            'device_session_id' => 'required|string',
+        ]);
+
+        $user = Auth::user();
+
+        $subscription = Subscription::with(['plan'])
+            ->findOrFail($request->subscription_id);
+
+        // 🔒 Seguridad
+        if ($subscription->customer_id !== $user->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No autorizado'
+            ], 403);
+        }
+
+        if ($subscription->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'La suscripción no está pendiente de pago'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            Log::info('💳 Procesando pago de suscripción', [
+                'customer_id' => $user->id,
+                'subscription_id' => $subscription->id,
+            ]);
+
+            // =============================
+            // 1️⃣ COBRAR EN OPENPAY
+            // =============================
+            $result = $this->openPayService->paySubscription(
+                $user->openpay_customer_id,
+                $subscription,
+                $request->card_id,
+                $request->device_session_id
+            );
+
+            if (!$result['success']) {
+                throw new \Exception($result['error']);
+            }
+
+            // =============================
+            // 2️⃣ REGISTRAR PAGO
+            // =============================
+            $payment = Payment::create([
+                'subscription_id' => $subscription->id,
+                'customer_id' => $user->id,
+                'amount' => $subscription->plan->price,
+                'method' => 'card',
+                'transaction_reference' => $result['charge_id'],
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+
+            // =============================
+            // 3️⃣ ACTIVAR SUSCRIPCIÓN
+            // =============================
+            $subscription->update([
+                'status' => 'active',
+                'start_date' => now(),
+                'end_date' => now()->addMonths(
+                    $subscription->plan->interval === 'month' ? 1 : 12
+                ),
+                'paid_at' => now(),
+                'payment_reference' => $result['charge_id'],
+            ]);
+
+            DB::commit();
+
+            // =============================
+            // 4️⃣ EVENTO
+            // =============================
+            SubscriptionPaid::dispatch($subscription);
+
+            Log::info('✅ Pago registrado y suscripción activada', [
+                'payment_id' => $payment->id,
+                'subscription_id' => $subscription->id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pago procesado correctamente',
+                'payment' => [
+                    'id' => $payment->id,
+                    'amount' => $payment->amount,
+                    'status' => $payment->status,
+                    'paid_at' => $payment->paid_at->toDateTimeString(),
+                ],
+                'subscription' => [
+                    'id' => $subscription->id,
+                    'status' => $subscription->status,
+                    'start_date' => $subscription->start_date->format('Y-m-d'),
+                    'end_date' => $subscription->end_date->format('Y-m-d'),
+                ]
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            Log::error('❌ Error procesando pago', [
+                'subscription_id' => $subscription->id,
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
