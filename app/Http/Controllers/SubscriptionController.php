@@ -480,7 +480,7 @@ class SubscriptionController extends AppBaseController
                 'amount' => $subscription->plan->price,
                 'method' => 'card',
                 'transaction_reference' => $result['charge_id'],
-                'status' => 'paid',
+                'status' => 'approved', // 👈 ENUM correcto
                 'paid_at' => now(),
             ]);
 
