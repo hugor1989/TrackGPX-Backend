@@ -12,13 +12,15 @@ use App\Http\Controllers\CardController;
 use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\SimCardController;
-use App\Http\Controllers\DeviceConfigurationController;    
+use App\Http\Controllers\DeviceConfigurationController;
 use App\Http\Controllers\GeofenceController;
 use App\Http\Controllers\RouteController;
 use App\Http\Controllers\PushTokenController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AdminDashboardController;
+use App\Http\Controllers\PaymentController;
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -37,7 +39,7 @@ Route::get('/debug/auth', function (Request $request) {
         'bearer_token' => $request->bearerToken(),
         'middleware' => $request->route()?->gatherMiddleware(),
     ]);
-    
+
     return response()->json([
         'authenticated' => $request->user() ? true : false,
         'user' => $request->user(),
@@ -67,6 +69,8 @@ Route::middleware('auth:user')->group(function () {
     Route::delete('customers-delete/{id}', [CustomerController::class, 'Customerdestroy']);
     Route::patch('customers-inactive/{id}', [CustomerController::class, 'toggleActiveCustomer']);
 
+    Route::get('get-all-payments', [PaymentController::class, 'index']);
+
     //Gestion de Plans
     Route::get('get-all-plan', [PlanController::class, 'GetAllPlans']);
     Route::post('create-plan', [PlanController::class, 'CreatePlan']);
@@ -94,7 +98,6 @@ Route::middleware('auth:user')->group(function () {
     Route::delete('sim-cards/delete-by-id/{id}', [SimCardController::class, 'destroy']);
     Route::post('sim-cards/import-provider', [SimCardController::class, 'importFromProvider']);
     Route::get('sim-cards/available', [SimCardController::class, 'getAvailableSims']);
-
 });
 
 #endregion
@@ -151,7 +154,7 @@ Route::middleware('auth:customer')->group(function () {
     // 🔔 Configuración de alarmas
     Route::post('devices/{id}/alarms', [DeviceController::class, 'updateAlarms']);
     Route::get('devices/{id}/alarms', [DeviceController::class, 'getAlarms']);
-    
+
     // 📤 Comandos al dispositivo
     Route::post('devices/{id}/commands', [DeviceController::class, 'sendCommand']);
     Route::get('devices/{id}/commands', [DeviceController::class, 'getCommands']);
@@ -164,14 +167,14 @@ Route::middleware('auth:customer')->group(function () {
     Route::delete('geofences/{id}', [GeofenceController::class, 'destroy']);
     Route::post('devices/{deviceId}/check-geofences', [GeofenceController::class, 'checkGeofences']);
 
-     // 1. Rutas disponibles para un dispositivo
+    // 1. Rutas disponibles para un dispositivo
     // GET: /api/devices/{deviceId}/routes/available
     Route::get('devices/{deviceId}/routes/available', [RouteController::class, 'getDeviceRoutes']);
-    
+
     // 2. Resumen de rutas por días  
     // GET: /api/devices/{deviceId}/routes/summary
     Route::get('devices/{deviceId}/routes/summary', [RouteController::class, 'getRoutesSummary']);
-    
+
     // 3. Obtener ruta por fechas (CON parámetros GET)
     // GET: /api/devices/{deviceId}/route?start_date=...&end_date=...
     Route::post('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
