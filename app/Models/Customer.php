@@ -13,15 +13,17 @@ class Customer extends Authenticatable
 {
     use HasApiTokens, Notifiable;
 
-    protected $fillable = ['name',
-     'openpay_customer_id', 
-     'email', 
-     'phone', 
-     'password', 
-     'address', 
-     'role',       // 🔥 CLAVE
-     'parent_id',
-     'status'];
+    protected $fillable = [
+        'name',
+        'openpay_customer_id',
+        'email',
+        'phone',
+        'password',
+        'address',
+        'role',       // 🔥 CLAVE
+        'parent_id',
+        'status'
+    ];
 
     protected $hidden = ['password'];
 
@@ -64,7 +66,12 @@ class Customer extends Authenticatable
 
     public function sharedDevices()
     {
-        return $this->belongsToMany(Device::class, 'device_customer');
+        return $this->belongsToMany(
+            Device::class,
+            'customer_device', // tabla pivote
+            'customer_id',
+            'device_id'
+        );
     }
 
     public function isAdmin(): bool
