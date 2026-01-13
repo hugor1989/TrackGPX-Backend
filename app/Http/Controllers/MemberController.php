@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\Device;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -44,13 +45,19 @@ class MemberController extends AppBaseController
      */
     public function index(Request $request)
     {
-        $admin = $request->user();
+        $admin = Auth::guard('customer')->user();
 
-        abort_unless($admin->isAdmin(), 403);
+        abort_unless($admin && $admin->role === 'admin', 403, 'Solo el admin puede ver los miembros');
 
-        return Customer::where('parent_id', $admin->id)
-            ->select('id', 'name', 'email', 'status')
+        $members = Customer::where('parent_id', $admin->id)
+            ->select('id', 'name', 'email', 'phone', 'status')
             ->get();
+
+        return $this->success(
+            $members,
+            'Listado de miembros',
+            200
+        );
     }
 
     /**
@@ -58,28 +65,37 @@ class MemberController extends AppBaseController
      */
     public function assignDevices(Request $request, Customer $member)
     {
-        $admin = $request->user();
+        // 🔐 USAR GUARD CORRECTO
+        $admin = Auth::guard('customer')->user();
 
-        abort_unless($admin->isAdmin(), 403, 'No autorizado');
-        abort_unless($member->parent_id === $admin->id, 403, 'Este miembro no pertenece a tu cuenta');
+        abort_unless($admin && $admin->role === 'admin', 403, 'No autorizado');
+        abort_unless(
+            $member->parent_id === $admin->id,
+            403,
+            'Este miembro no pertenece a tu cuenta'
+        );
 
         $request->validate([
             'device_ids' => 'required|array',
             'device_ids.*' => 'exists:devices,id'
         ]);
 
-        // Solo dispositivos del admin
-        $devices = $request->device_ids;
-
-        $validDevices = \App\Models\Device::whereIn('id', $devices)
+        // 🔒 Solo dispositivos del admin
+        $validDevices = Device::whereIn('id', $request->device_ids)
             ->where('customer_id', $admin->id)
-            ->pluck('id');
+            ->pluck('id')
+            ->values(); // 👈 limpia índices
 
+        // 🔁 Sync dispositivos compartidos
         $member->sharedDevices()->sync($validDevices);
 
-        return response()->json([
-            'message' => 'Dispositivos asignados correctamente',
-            'devices' => $validDevices
-        ]);
+        return $this->success(
+            [
+                'member_id' => $member->id,
+                'assigned_device_ids' => $validDevices
+            ],
+            'Dispositivos asignados correctamente',
+            200
+        );
     }
 }
