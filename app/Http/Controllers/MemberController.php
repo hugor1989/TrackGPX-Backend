@@ -160,16 +160,7 @@ class MemberController extends AppBaseController
 
        
         $resultWhatsApp = $this->whatapiService->sendMessage($phone, $message);
-        $this->whatapiService->sendMessage("52{$phone}", $message);
-
-        if (!$resultWhatsApp->successful()) {
-            return $this->error(
-                'No se pudo enviar la invitación',
-                500,
-                $resultWhatsApp->json()
-            );
-        }
-
+       
         // (Opcional) Guardar log de invitación
         // InvitationLog::create([...])
 
