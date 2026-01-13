@@ -80,6 +80,15 @@ class Device extends Model
         return $this->hasMany(DeviceCommand::class);
     }
 
+    public function sharedWith()
+    {
+        return $this->belongsToMany(Customer::class, 'device_customer');
+    }
+
+    public function owner()
+    {
+        return $this->belongsTo(Customer::class, 'customer_id');
+    }
 
     /**
      * Relación con el cliente (usuario)

@@ -20,6 +20,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AdminDashboardController;
 use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\MemberController;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -186,6 +187,15 @@ Route::middleware('auth:customer')->group(function () {
     // 4. Exportar ruta
     // POST: /api/devices/{deviceId}/route/export
     Route::post('devices/{deviceId}/route/export', [RouteController::class, 'exportRoute']);
+
+    // Obtener dispositivos del customer autenticado (admin o member)
+    Route::get('devices/my', [DeviceController::class, 'getMyDevices']);
+    // Miembros
+    Route::post('members', [MemberController::class, 'store']);              // crear miembro
+    Route::get('members', [MemberController::class, 'index']);               // listar miembros
+    Route::post('members/{member}/devices', [MemberController::class, 'assignDevices']); // asignar devices
+
+    
 
     Route::prefix('notifications')->group(function () {
         Route::get('/get-all', [NotificationController::class, 'index']);

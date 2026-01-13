@@ -1070,4 +1070,28 @@ class DeviceController extends Controller
 
         return $earthRadius * $c;
     }
+
+    public function getMyDevices(Request $request)
+    {
+        $customer = $request->user(); // auth:customer
+
+        if ($customer->isAdmin()) {
+            return Device::where('customer_id', $customer->id)
+                ->with([
+                    'vehicle',
+                    'configuration',
+                    'simCard'
+                ])
+                ->get();
+        }
+
+        // Member
+        return $customer->sharedDevices()
+            ->with([
+                'vehicle',
+                'configuration',
+                'simCard'
+            ])
+            ->get();
+    }
 }
