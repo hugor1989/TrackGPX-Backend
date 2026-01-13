@@ -194,6 +194,7 @@ Route::middleware('auth:customer')->group(function () {
     Route::post('members', [MemberController::class, 'store']);              // crear miembro
     Route::get('members', [MemberController::class, 'index']);               // listar miembros
     Route::post('members/{member}/devices', [MemberController::class, 'assignDevices']); // asignar devices
+    Route::get('members/{member}/devices', [MemberController::class, 'devices']);
 
     
 
