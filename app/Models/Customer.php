@@ -41,4 +41,31 @@ class Customer extends Authenticatable
     {
         return $this->hasMany(Device::class, 'customer_id');
     }
+
+    // app/Models/Customer.php
+
+    public function members()
+    {
+        return $this->hasMany(Customer::class, 'parent_id');
+    }
+
+    public function parent()
+    {
+        return $this->belongsTo(Customer::class, 'parent_id');
+    }
+
+    public function sharedDevices()
+    {
+        return $this->belongsToMany(Device::class, 'device_customer');
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
+    }
+
+    public function isMember(): bool
+    {
+        return $this->role === 'member';
+    }
 }
