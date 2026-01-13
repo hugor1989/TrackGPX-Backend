@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 use App\Models\Customer;
-
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
 
 class MemberController extends Controller
@@ -19,12 +19,14 @@ class MemberController extends Controller
         $request->validate([
             'name' => 'required|string',
             'email' => 'required|email|unique:customers,email',
+            'phone' => 'required|string|max:20',
             'password' => 'required|min:6'
         ]);
 
         $member = Customer::create([
             'name' => $request->name,
             'email' => $request->email,
+            'phone' => $request->phone, // ✅ NUEVO
             'password' => Hash::make($request->password),
             'role' => 'member',
             'parent_id' => $admin->id,
