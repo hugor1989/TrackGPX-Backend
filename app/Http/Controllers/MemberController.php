@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
-class MemberController extends Controller
+class MemberController extends AppBaseController
 {
     /**
      * Crear miembro (familia / amigo)
@@ -36,7 +36,7 @@ class MemberController extends Controller
             'status' => 'active'
         ]);
 
-        return response()->json($member, 201);
+        return $this->success($member, 'Miembro creado correctamente', 201);
     }
 
     /**
