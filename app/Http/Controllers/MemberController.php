@@ -98,4 +98,23 @@ class MemberController extends AppBaseController
             200
         );
     }
+
+    public function devices(Customer $member)
+    {
+        $admin = Auth::guard('customer')->user();
+
+        abort_unless($admin && $admin->role === 'admin', 403);
+        abort_unless($member->parent_id === $admin->id, 403);
+
+        $devices = Device::where('customer_id', $admin->id)
+            ->select('id', 'imei', 'status')
+            ->get();
+
+        $assigned = $member->sharedDevices()->pluck('devices.id');
+
+        return $this->success([
+            'devices' => $devices,
+            'assigned' => $assigned
+        ], 'Dispositivos del miembro');
+    }
 }
