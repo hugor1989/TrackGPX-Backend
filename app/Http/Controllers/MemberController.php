@@ -1,9 +1,11 @@
 <?php
 
 namespace App\Http\Controllers;
+
 use App\Models\Customer;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class MemberController extends Controller
 {
@@ -12,9 +14,10 @@ class MemberController extends Controller
      */
     public function store(Request $request)
     {
-        $admin = $request->user(); // auth:customer
+        // 🔥 AQUÍ ESTÁ LA CLAVE
+        $admin = Auth::guard('customer')->user();
 
-        abort_unless($admin->isAdmin(), 403, 'Solo el admin puede crear miembros');
+        abort_unless($admin && $admin->role === 'admin', 403, 'Solo el admin puede crear miembros');
 
         $request->validate([
             'name' => 'required|string',
@@ -26,10 +29,10 @@ class MemberController extends Controller
         $member = Customer::create([
             'name' => $request->name,
             'email' => $request->email,
-            'phone' => $request->phone, // ✅ NUEVO
+            'phone' => $request->phone,
             'password' => Hash::make($request->password),
-            'role' => 'member',
-            'parent_id' => $admin->id,
+            'role' => 'member',          // ✅ YA NO SE PISA
+            'parent_id' => $admin->id,   // ✅ YA SE ASIGNA
             'status' => 'active'
         ]);
 
