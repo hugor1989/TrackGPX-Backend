@@ -23,12 +23,12 @@ class CustomerAuthController extends AppBaseController
     //CRM WhatsApp
     protected $whatapiService;
     // Inyectar el servicio en el constructor
-    public function __construct(OpenPayService $openPayService,
-                                APICrmWhatSapp $whatapiService,)
-    {
+    public function __construct(
+        OpenPayService $openPayService,
+        APICrmWhatSapp $whatapiService,
+    ) {
         $this->openPayService = $openPayService;
         $this->whatapiService = $whatapiService;
-
     }
 
     public function customerRegister(Request $request)
@@ -235,6 +235,40 @@ class CustomerAuthController extends AppBaseController
             'password' => 'required'
         ]);
 
+        $customer = Customer::where('email', $request->email)->first();
+
+        if (!$customer || !Hash::check($request->password, $customer->password)) {
+            return $this->error('Credenciales incorrectas', 401);
+        }
+
+        // 🔥 CARGA CONDICIONAL SEGÚN ROL
+        if ($customer->role === 'admin') {
+            $customer->load([
+                'devices:id,imei,customer_id'
+            ]);
+        } else {
+            $customer->load([
+                'sharedDevices:id,imei'
+            ]);
+        }
+
+        $token = $customer
+            ->createToken('customer_token', ['customer'])
+            ->plainTextToken;
+
+        return $this->respond(true, $token, [
+            'customer' => $customer
+        ], 'Login de cliente correcto', 200);
+    }
+
+
+    /*  public function customerLoginNuevo(Request $request)
+    {
+        $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required'
+        ]);
+
         // Buscamos al cliente junto con sus devices (solo id e imei)
         $customer = Customer::with(['devices:id,imei,customer_id'])
             ->where('email', $request->email)
@@ -253,7 +287,7 @@ class CustomerAuthController extends AppBaseController
         return $this->respond(true, $token, [
            'customer' => $customer,
         ], 'Login de cliente correcto', 200);
-    }
+    } */
 
     public function customerLogout(Request $request)
     {
@@ -301,7 +335,7 @@ class CustomerAuthController extends AppBaseController
 
             // 4. Enviar mensaje por WhatsApp
             $message = "Hola {$customer->name}, tu código de recuperación es: " . $verificationCode->code;
-            
+
             try {
                 $this->whatapiService->sendMessage($customer->phone, $message);
                 Log::info('📤 WhatsApp enviado', ['phone' => $customer->phone]);
@@ -313,7 +347,6 @@ class CustomerAuthController extends AppBaseController
             return $this->respond(true, null, [
                 'phone' => $customer->phone
             ], 'Código enviado correctamente a tu WhatsApp.', 200);
-
         } catch (\Exception $e) {
             Log::error('❌ Error en sendRecoveryOtp', ['error' => $e->getMessage()]);
             return $this->respond(false, null, null, 'Ocurrió un error inesperado.', 500);
@@ -345,7 +378,7 @@ class CustomerAuthController extends AppBaseController
             // 3. Verificar código válido para ese cliente
             $verificationCode = VerificationCode::forCustomer($customer->id)
                 ->where('code', $request->code)
-                ->valid() 
+                ->valid()
                 ->first();
 
             if (!$verificationCode) {
@@ -364,7 +397,6 @@ class CustomerAuthController extends AppBaseController
             Log::info('✅ Contraseña actualizada vía Phone', ['customer_id' => $customer->id]);
 
             return $this->respond(true, null, null, 'Contraseña actualizada correctamente.', 200);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('❌ Error en resetPassword', ['error' => $e->getMessage()]);
