@@ -195,8 +195,7 @@ Route::middleware('auth:customer')->group(function () {
     Route::get('members', [MemberController::class, 'index']);               // listar miembros
     Route::post('members/{member}/devices', [MemberController::class, 'assignDevices']); // asignar devices
     Route::get('members/{member}/devices', [MemberController::class, 'devices']);
-
-    
+    Route::post('members/{member}/invite-whatsapp',[MemberController::class, 'inviteWhatsapp']);
 
     Route::prefix('notifications')->group(function () {
         Route::get('/get-all', [NotificationController::class, 'index']);

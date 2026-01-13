@@ -7,12 +7,23 @@ use App\Models\Device;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use App\Services\APICrmWhatSapp;
+
 
 class MemberController extends AppBaseController
 {
     /**
      * Crear miembro (familia / amigo)
      */
+     //CRM WhatsApp
+    protected $whatapiService;
+
+    public function __construct(APICrmWhatSapp $whatapiService)
+    {
+        $this->whatapiService = $whatapiService;
+
+    }
+
     public function store(Request $request)
     {
         // 🔥 AQUÍ ESTÁ LA CLAVE
@@ -116,5 +127,48 @@ class MemberController extends AppBaseController
             'devices' => $devices,
             'assigned' => $assigned
         ], 'Dispositivos del miembro');
+    }
+
+    public function inviteWhatsapp(Customer $member)
+    {
+        $admin = Auth::guard('customer')->user();
+
+        abort_unless($admin && $admin->role === 'admin', 403);
+        abort_unless($member->parent_id === $admin->id, 403);
+
+        abort_unless($member->phone, 422, 'El miembro no tiene teléfono');
+
+        // 📩 Mensaje
+        $message = "Hola {$member->name},\n\n"
+            . "{$admin->name} te ha invitado a usar la app de rastreo GPS.\n\n"
+            . "Descárgala aquí:\n"
+            . "👉 https://tudominio.com/app\n\n"
+            . "Ingresa con este numero:\n"
+            . "� {$member->phone}\n\n"
+            . "¡Bienvenido!";
+
+        // 📞 Limpieza teléfono
+        $phone = preg_replace('/\D/', '', $member->phone);
+
+       
+        $resultWhatsApp = $this->whatapiService->sendMessage($phone, $message);
+        $this->whatapiService->sendMessage("52{$phone}", $message);
+
+        if (!$resultWhatsApp->successful()) {
+            return $this->error(
+                'No se pudo enviar la invitación',
+                500,
+                $resultWhatsApp->json()
+            );
+        }
+
+        // (Opcional) Guardar log de invitación
+        // InvitationLog::create([...])
+
+        return $this->success(
+            null,
+            'Invitación enviada por WhatsApp',
+            200
+        );
     }
 }
