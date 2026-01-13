@@ -7,6 +7,7 @@ use App\Models\Device;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use App\Services\APICrmWhatSapp;
 
 
@@ -135,6 +136,13 @@ class MemberController extends AppBaseController
 
         abort_unless($admin && $admin->role === 'admin', 403);
         abort_unless($member->parent_id === $admin->id, 403);
+
+        Log::info('INVITE WHATSAPP HIT', [
+            'member_id' => $member->id,
+            'admin_id' => $admin->id,
+            'timestamp' => now()->toDateTimeString(),
+            'request_id' => request()->header('X-Request-Id')
+        ]);
 
         abort_unless($member->phone, 422, 'El miembro no tiene teléfono');
 
