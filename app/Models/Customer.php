@@ -68,7 +68,7 @@ class Customer extends Authenticatable
     {
         return $this->belongsToMany(
             Device::class,
-            'customer_device', // tabla pivote
+            'device_customer', // tabla pivote
             'customer_id',
             'device_id'
         );
