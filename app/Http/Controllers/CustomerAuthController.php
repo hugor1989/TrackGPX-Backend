@@ -241,14 +241,22 @@ class CustomerAuthController extends AppBaseController
             return $this->error('Credenciales incorrectas', 401);
         }
 
+        // ✅ DEFINIMOS LAS COLUMNAS QUE QUEREMOS (Incluyendo las nuevas de ubicación)
+        $columnsToSelect = 'id,imei,customer_id,vehicle_name,last_latitude,last_longitude,last_speed,last_heading,last_connection';
+
         // 🔥 CARGA CONDICIONAL SEGÚN ROL
         if ($customer->role === 'admin') {
             $customer->load([
-                'devices:id,imei,customer_id'
+                // 1. Cargamos dispositivos con sus coordenadas
+                'devices:' . $columnsToSelect,
+
+                // 2. IMPORTANTE: Cargamos la configuración (icono, color, nombre)
+                'devices.configuration'
             ]);
         } else {
             $customer->load([
-                'sharedDevices:id,imei'
+                'sharedDevices:' . $columnsToSelect,
+                'sharedDevices.configuration'
             ]);
         }
 
