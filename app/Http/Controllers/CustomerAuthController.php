@@ -241,22 +241,26 @@ class CustomerAuthController extends AppBaseController
             return $this->error('Credenciales incorrectas', 401);
         }
 
-        // ✅ DEFINIMOS LAS COLUMNAS QUE QUEREMOS (Incluyendo las nuevas de ubicación)
-        $columnsToSelect = 'id,imei,customer_id,vehicle_name,last_latitude,last_longitude,last_speed,last_heading,last_connection';
+        // ✅ CORRECCIÓN: Quitamos 'vehicle_name' porque no existe en la tabla.
+        // Solo pedimos las columnas REALES de la tabla devices.
+        $columnsToSelect = 'id,imei,customer_id,last_latitude,last_longitude,last_speed,last_heading,last_connection';
 
-        // 🔥 CARGA CONDICIONAL SEGÚN ROL
         if ($customer->role === 'admin') {
             $customer->load([
-                // 1. Cargamos dispositivos con sus coordenadas
+                // 1. Dispositivos con las columnas nuevas
                 'devices:' . $columnsToSelect,
 
-                // 2. IMPORTANTE: Cargamos la configuración (icono, color, nombre)
-                'devices.configuration'
+                // 2. Configuración (Iconos, colores, alias)
+                'devices.configuration',
+
+                // 3. (Opcional) Si necesitas datos del vehículo real (placa, marca)
+                'devices.vehicle'
             ]);
         } else {
             $customer->load([
                 'sharedDevices:' . $columnsToSelect,
-                'sharedDevices.configuration'
+                'sharedDevices.configuration',
+                'sharedDevices.vehicle'
             ]);
         }
 
