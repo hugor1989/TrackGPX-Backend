@@ -23,7 +23,13 @@ class Device extends Model
         'model',
         'config_parameters',
         'sim_card_id', // ← AGREGAR ESTA LÍNEA
-        'activated_at'
+        'activated_at',
+
+        // 👇 NUEVOS CAMPOS AGREGADOS
+        'last_latitude',
+        'last_longitude',
+        'last_speed',
+        'last_heading'
     ];
 
     protected $casts = [

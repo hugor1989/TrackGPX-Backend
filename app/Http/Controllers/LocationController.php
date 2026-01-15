@@ -97,6 +97,27 @@ class LocationController extends Controller
                 'timestamp' => $timestamp,
             ]);
 
+            // 2. ACTUALIZAR EL DISPOSITIVO (Cache para el Mapa)
+            // 🔥 EL FILTRO: Solo entramos aquí si NO es 0,0
+            if ($validated['latitude'] != 0 && $validated['longitude'] != 0) {
+                
+                $device->update([
+                    'last_connection' => now(),
+                    
+                    // Datos de ubicación
+                    'last_latitude'   => $validated['latitude'],
+                    'last_longitude'  => $validated['longitude'],
+                    'last_speed'      => $validated['speed'] ?? 0,
+                    'last_heading'    => $validated['heading'] ?? 0, // Importante para rotación
+                ]);
+                
+            } else {
+                // Si es 0,0 solo actualizamos la hora de conexión para saber que está Online
+                $device->update([
+                    'last_connection' => now(),
+                ]);
+            }
+
             Log::info('✅ Ubicación guardada', ['location_id' => $location->id]);
 
             // Preparar datos de ubicación para las alertas
