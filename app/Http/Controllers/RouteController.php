@@ -1136,8 +1136,8 @@ class RouteController extends Controller
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // 🚀 OPTIMIZACIÓN 1: Select específico para ahorrar memoria RAM
-            $locations = Location::select(['id', 'device_id', 'latitude', 'longitude', 'speed', 'battery_level', 'timestamp', 'ignition'])
+            // 🟢 CORRECCIÓN AQUÍ: Eliminé 'ignition' del array
+            $locations = Location::select(['id', 'device_id', 'latitude', 'longitude', 'speed', 'battery_level', 'timestamp'])
                 ->where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
@@ -1155,34 +1155,32 @@ class RouteController extends Controller
 
             // Agrupar por día
             $dailyData = $locations->groupBy(function ($location) {
-                return $location->timestamp->format('Y-m-d');
+                return Carbon::parse($location->timestamp)->format('Y-m-d');
             });
 
             $dailyActivity = [];
 
             foreach ($dailyData as $date => $dayLocations) {
-                // Detectar rutas (Mantenemos tu lógica existente)
+                // Se asume que detectMultipleRoutes funciona con velocidad si no hay ignición
                 $dayRoutes = $this->detectMultipleRoutes($dayLocations, 5, $device);
 
                 $movingTime = 0;
                 $totalDistance = 0;
 
-                // Cálculos directos de colección (Más rápido)
                 $maxSpeed = $dayLocations->max('speed');
-                $avgSpeed = $dayLocations->avg('speed'); // Ojo: avg simple, para exactitud ponderada se requiere cálculo manual
+                $avgSpeed = $dayLocations->avg('speed');
 
                 foreach ($dayRoutes as $route) {
                     $movingTime += $route['statistics']['duration'];
                     $totalDistance += $route['statistics']['distance'];
                 }
 
-                // 🚀 OPTIMIZACIÓN 2: Lógica de Batería (Ignorar Cargas)
+                // Lógica de Batería (Ignorar Cargas)
                 $batteryConsumption = 0;
                 $lastBattery = null;
                 foreach ($dayLocations as $loc) {
                     $currentBat = $loc->battery_level;
                     if ($lastBattery !== null) {
-                        // Solo sumamos si el nivel bajó. Si subió, estaba cargando.
                         if ($currentBat < $lastBattery) {
                             $batteryConsumption += ($lastBattery - $currentBat);
                         }
@@ -1190,20 +1188,18 @@ class RouteController extends Controller
                     $lastBattery = $currentBat;
                 }
 
-                // Consulta optimizada de alarmas
+                // Consulta de alarmas
                 $dayStart = Carbon::parse($date)->startOfDay();
                 $dayEnd = Carbon::parse($date)->endOfDay();
 
-                // Asumiendo que notifications tiene device_id. Si no, usa tu join original pero cachealo.
+                // Ajusta 'customer_id' o 'device_id' según tu tabla notifications
                 $alarmsQuery = DB::table('notifications')
-                    ->where('customer_id', $device->customer_id) // Ajusta si tienes device_id directo
-                    // ->where('device_id', $device->id) // PREFERIBLE si tienes la columna
+                    ->where('customer_id', $device->customer_id)
                     ->whereBetween('created_at', [$dayStart, $dayEnd]);
 
                 $alarmsCount = $alarmsQuery->count();
 
-                // ESTIMACIÓN DE COMBUSTIBLE (Ejemplo: 10 km por litro)
-                // Esto podrías traerlo de $device->fuel_consumption_rate
+                // ESTIMACIÓN COMBUSTIBLE (Ej: 10 km/L)
                 $fuelEfficiency = 10;
                 $estimatedFuel = $totalDistance > 0 ? round($totalDistance / $fuelEfficiency, 1) : 0;
 
@@ -1217,7 +1213,7 @@ class RouteController extends Controller
                         'total_moving_time_human' => $this->secondsToHuman($movingTime),
                         'max_speed' => round($maxSpeed, 2),
                         'avg_speed' => round($avgSpeed, 2),
-                        'estimated_fuel' => $estimatedFuel, // 🔥 NUEVO CAMPO
+                        'estimated_fuel' => $estimatedFuel,
                     ],
                     'battery_stats' => [
                         'start' => $dayLocations->first()->battery_level,
@@ -1227,10 +1223,9 @@ class RouteController extends Controller
                     'alarms' => [
                         'total' => $alarmsCount,
                     ],
-                    // Pasamos las rutas limpias para el Timeline del Frontend
                     'routes' => array_map(function ($route) {
                         return [
-                            'start_time' => $route['start_time'], // Debe ser formato H:i:s o Y-m-d H:i:s
+                            'start_time' => $route['start_time'],
                             'end_time' => $route['end_time'],
                             'duration' => $route['statistics']['duration']
                         ];
@@ -1256,7 +1251,7 @@ class RouteController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Error reporte:', ['msg' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Error interno'], 500);
+            return response()->json(['success' => false, 'message' => 'Error interno: ' . $e->getMessage()], 500);
         }
     }
 }
