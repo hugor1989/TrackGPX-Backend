@@ -1,48 +1,26 @@
 <?php
 
-namespace App\Listeners;
+namespace App\Events;
 
-use App\Events\LowBatteryAlert;
-use App\Services\OneSignalService;
-use Illuminate\Contracts\Queue\ShouldQueue;
+use App\Models\Device;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection; // <--- No olvides importar esto
 
-class SendLowBatteryNotification implements ShouldQueue
+class LowBatteryAlert
 {
-    private OneSignalService $oneSignal;
+    use Dispatchable, SerializesModels;
 
-    public function __construct(OneSignalService $oneSignal)
+    public Device $device;
+    public int $batteryLevel;
+    public array $locationData;
+    public Collection $recipients; // <--- Nueva propiedad
+
+    public function __construct(Device $device, int $batteryLevel, array $locationData, Collection $recipients)
     {
-        $this->oneSignal = $oneSignal;
-    }
-
-    public function handle(LowBatteryAlert $event): void
-    {
-        $device = $event->device;
-        $customer = $device->customer;
-
-        if (!$customer || !$customer->expo_push_token) {
-            return;
-        }
-
-        $vehicle = $device->vehicle;
-        $vehicleName = $vehicle ? $vehicle->alias ?? $vehicle->plates : $device->imei;
-
-        $title = '🔋 Batería Baja';
-        $message = "El dispositivo {$vehicleName} tiene batería baja: {$event->batteryLevel}%";
-
-        $this->oneSignal->sendAlertNotification(
-            $customer->expo_push_token,
-            $title,
-            $message,
-            'low_battery',
-            [
-                'type' => 'low_battery',
-                'device_id' => $device->id,
-                'vehicle_id' => $vehicle?->id,
-                'battery_level' => $event->batteryLevel,
-                'latitude' => $event->locationData['latitude'] ?? null,
-                'longitude' => $event->locationData['longitude'] ?? null,
-            ]
-        );
+        $this->device = $device;
+        $this->batteryLevel = $batteryLevel;
+        $this->locationData = $locationData;
+        $this->recipients = $recipients; // <--- Asignación
     }
 }
