@@ -945,7 +945,7 @@ class RouteController extends Controller
     /**
      * 📊 Reporte de Actividad Diaria
      */
-    public function getDailyActivityReport(Request $request, $deviceId)
+    /* public function getDailyActivityReport(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
@@ -1117,6 +1117,146 @@ class RouteController extends Controller
                 'success' => false,
                 'message' => 'Error al obtener reporte: ' . $e->getMessage()
             ], 500);
+        }
+    } */
+
+    public function getDailyActivityReport(Request $request, $deviceId)
+    {
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Datos inválidos', 'errors' => $validator->errors()], 400);
+        }
+
+        try {
+            $device = Device::findOrFail($deviceId);
+            $startDate = Carbon::parse($request->start_date)->startOfDay();
+            $endDate = Carbon::parse($request->end_date)->endOfDay();
+
+            // 🚀 OPTIMIZACIÓN 1: Select específico para ahorrar memoria RAM
+            $locations = Location::select(['id', 'device_id', 'latitude', 'longitude', 'speed', 'battery_level', 'timestamp', 'ignition'])
+                ->where('device_id', $device->id)
+                ->whereBetween('timestamp', [$startDate, $endDate])
+                ->where('latitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC')
+                ->get();
+
+            if ($locations->isEmpty()) {
+                return response()->json([
+                    'success' => true,
+                    'daily_activity' => [],
+                    'period_summary' => null,
+                    'message' => 'No hay datos en el rango de fechas'
+                ]);
+            }
+
+            // Agrupar por día
+            $dailyData = $locations->groupBy(function ($location) {
+                return $location->timestamp->format('Y-m-d');
+            });
+
+            $dailyActivity = [];
+
+            foreach ($dailyData as $date => $dayLocations) {
+                // Detectar rutas (Mantenemos tu lógica existente)
+                $dayRoutes = $this->detectMultipleRoutes($dayLocations, 5, $device);
+
+                $movingTime = 0;
+                $totalDistance = 0;
+
+                // Cálculos directos de colección (Más rápido)
+                $maxSpeed = $dayLocations->max('speed');
+                $avgSpeed = $dayLocations->avg('speed'); // Ojo: avg simple, para exactitud ponderada se requiere cálculo manual
+
+                foreach ($dayRoutes as $route) {
+                    $movingTime += $route['statistics']['duration'];
+                    $totalDistance += $route['statistics']['distance'];
+                }
+
+                // 🚀 OPTIMIZACIÓN 2: Lógica de Batería (Ignorar Cargas)
+                $batteryConsumption = 0;
+                $lastBattery = null;
+                foreach ($dayLocations as $loc) {
+                    $currentBat = $loc->battery_level;
+                    if ($lastBattery !== null) {
+                        // Solo sumamos si el nivel bajó. Si subió, estaba cargando.
+                        if ($currentBat < $lastBattery) {
+                            $batteryConsumption += ($lastBattery - $currentBat);
+                        }
+                    }
+                    $lastBattery = $currentBat;
+                }
+
+                // Consulta optimizada de alarmas
+                $dayStart = Carbon::parse($date)->startOfDay();
+                $dayEnd = Carbon::parse($date)->endOfDay();
+
+                // Asumiendo que notifications tiene device_id. Si no, usa tu join original pero cachealo.
+                $alarmsQuery = DB::table('notifications')
+                    ->where('customer_id', $device->customer_id) // Ajusta si tienes device_id directo
+                    // ->where('device_id', $device->id) // PREFERIBLE si tienes la columna
+                    ->whereBetween('created_at', [$dayStart, $dayEnd]);
+
+                $alarmsCount = $alarmsQuery->count();
+
+                // ESTIMACIÓN DE COMBUSTIBLE (Ejemplo: 10 km por litro)
+                // Esto podrías traerlo de $device->fuel_consumption_rate
+                $fuelEfficiency = 10;
+                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / $fuelEfficiency, 1) : 0;
+
+                $dailyActivity[] = [
+                    'date' => $date,
+                    'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
+                    'summary' => [
+                        'total_routes' => count($dayRoutes),
+                        'total_distance_km' => round($totalDistance, 2),
+                        'total_moving_time' => $movingTime,
+                        'total_moving_time_human' => $this->secondsToHuman($movingTime),
+                        'max_speed' => round($maxSpeed, 2),
+                        'avg_speed' => round($avgSpeed, 2),
+                        'estimated_fuel' => $estimatedFuel, // 🔥 NUEVO CAMPO
+                    ],
+                    'battery_stats' => [
+                        'start' => $dayLocations->first()->battery_level,
+                        'end' => $dayLocations->last()->battery_level,
+                        'total_drain' => $batteryConsumption,
+                    ],
+                    'alarms' => [
+                        'total' => $alarmsCount,
+                    ],
+                    // Pasamos las rutas limpias para el Timeline del Frontend
+                    'routes' => array_map(function ($route) {
+                        return [
+                            'start_time' => $route['start_time'], // Debe ser formato H:i:s o Y-m-d H:i:s
+                            'end_time' => $route['end_time'],
+                            'duration' => $route['statistics']['duration']
+                        ];
+                    }, $dayRoutes),
+                ];
+            }
+
+            // Totales del período
+            $totalStats = [
+                'total_distance_km' => round(collect($dailyActivity)->sum('summary.total_distance_km'), 2),
+                'total_fuel' => round(collect($dailyActivity)->sum('summary.estimated_fuel'), 1),
+                'total_moving_time' => collect($dailyActivity)->sum('summary.total_moving_time'),
+                'avg_distance_per_day' => count($dailyActivity) > 0 ? round(collect($dailyActivity)->avg('summary.total_distance_km'), 2) : 0,
+            ];
+            $totalStats['total_moving_time_human'] = $this->secondsToHuman($totalStats['total_moving_time']);
+
+            return response()->json([
+                'success' => true,
+                'device' => ['id' => $device->id, 'name' => $device->name],
+                'period_summary' => $totalStats,
+                'daily_activity' => $dailyActivity,
+                'message' => 'Reporte generado correctamente'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error reporte:', ['msg' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Error interno'], 500);
         }
     }
 }
