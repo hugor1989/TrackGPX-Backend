@@ -22,12 +22,16 @@ class SendSpeedAlertNotification implements ShouldQueue
     {
         try {
             $device = $event->device;
-            $customer = $device->customer;
+            
+            // 1. OBTENER LA LISTA DE DESTINATARIOS DEL EVENTO
+            $recipients = $event->recipients;
 
-            if (!$customer) {
+            if ($recipients->isEmpty()) {
+                Log::warning('⚠️ Alerta de velocidad procesada pero sin destinatarios (Lista vacía).');
                 return;
             }
 
+            // 2. PREPARAR DATOS COMUNES (Para no repetir lógica en el bucle)
             $vehicle = $device->vehicle;
             $vehicleName = $vehicle ? $vehicle->alias ?? $vehicle->plates : $device->imei;
 
@@ -42,55 +46,56 @@ class SendSpeedAlertNotification implements ShouldQueue
                 'speed_limit' => $event->speedLimit,
                 'latitude' => $event->locationData['latitude'] ?? null,
                 'longitude' => $event->locationData['longitude'] ?? null,
+                'type' => 'speed_alert', // Agregado aquí para consistencia
             ];
 
-            // ✅ GUARDAR EN BASE DE DATOS
-            $notification = Notification::create([
-                'customer_id' => $customer->id,
-                'event_id' => null, // Si tienes relación con eventos, ponlo aquí
-                'type' => 'speed_alert',
-                'title' => $title,
-                'message' => $message,
-                'data' => $notificationData,
-                'is_read' => false,
-                'push_sent' => false,
-            ]);
+            Log::info("🚀 Iniciando envío de alertas a " . $recipients->count() . " usuarios.");
 
-            Log::info('💾 Notificación guardada en BD', [
-                'notification_id' => $notification->id,
-                'customer_id' => $customer->id,
-            ]);
-
-            // ✅ ENVIAR PUSH NOTIFICATION (solo si tiene token)
-            if ($customer->expo_push_token) {
-                Log::info('📤 Enviando notificación push de velocidad', [
-                    'customer_id' => $customer->id,
-                    'external_id' => $customer->expo_push_token,
+            // 3. BUCLE PARA CADA USUARIO (ADMIN + MEMBERS)
+            foreach ($recipients as $user) {
+                
+                // A. GUARDAR EN BASE DE DATOS (Registro individual por usuario)
+                $notification = Notification::create([
+                    'customer_id' => $user->id, // <--- ID del usuario actual del bucle
+                    'event_id' => null,
+                    'type' => 'speed_alert',
+                    'title' => $title,
+                    'message' => $message,
+                    'data' => $notificationData,
+                    'is_read' => false,
+                    'push_sent' => false,
                 ]);
 
-                $result = $this->oneSignal->sendAlertNotification(
-                    $customer->expo_push_token,
-                    $title,
-                    $message,
-                    'speed',
-                    array_merge($notificationData, [
-                        'type' => 'speed_alert',
-                        'notification_id' => $notification->id,
-                    ])
-                );
+                // B. ENVIAR PUSH NOTIFICATION
+                if (!empty($user->expo_push_token)) {
+                    
+                    // Enviamos usando el token específico de ESTE usuario
+                    $result = $this->oneSignal->sendAlertNotification(
+                        $user->expo_push_token,
+                        $title,
+                        $message,
+                        'speed',
+                        array_merge($notificationData, [
+                            'notification_id' => $notification->id,
+                            'recipient_id' => $user->id // Útil para depuración
+                        ])
+                    );
 
-                if ($result) {
-                    // Marcar como enviada
-                    $notification->markAsPushSent();
-                    Log::info('✅ Push notification de velocidad enviada');
+                    if ($result) {
+                        $notification->markAsPushSent();
+                        Log::info("✅ Push enviada a User ID: {$user->id}");
+                    } else {
+                        Log::error("❌ Falló push a User ID: {$user->id}");
+                    }
                 } else {
-                    Log::error('❌ Falló envío de push notification de velocidad');
+                    Log::info("ℹ️ User ID: {$user->id} no tiene token push configurado.");
                 }
             }
 
         } catch (\Exception $e) {
             Log::error('❌ Excepción en SendSpeedAlertNotification', [
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
         }
     }

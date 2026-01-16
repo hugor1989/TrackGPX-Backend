@@ -289,4 +289,12 @@ class Device extends Model
 
         return $this->last_connection->diffForHumans();
     }
+
+    public function members()
+    {
+        // Relación muchos a muchos usando la tabla pivote 'device_customer'
+        // id local: device_id, id foráneo: customer_id
+        return $this->belongsToMany(Customer::class, 'device_customer', 'device_id', 'customer_id')
+            ->withTimestamps();
+    }
 }
