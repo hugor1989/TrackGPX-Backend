@@ -230,35 +230,36 @@ class CustomerAuthController extends AppBaseController
 
     public function customerLoginNuevo(Request $request)
     {
+        // 1. Validación corregida
         $request->validate([
-            'phone'    => 'required|phone',
+            // Cambiamos 'phone' por 'string' o 'numeric' para evitar errores de reglas inexistentes
+            'phone'    => 'required|string|min:8',
             'password' => 'required'
         ]);
 
+        // 2. Buscar al cliente
         $customer = Customer::where('phone', $request->phone)->first();
 
         if (!$customer || !Hash::check($request->password, $customer->password)) {
             return $this->error('Credenciales incorrectas', 401);
         }
 
-        // ✅ CORRECCIÓN: Quitamos 'vehicle_name' porque no existe en la tabla.
-        // Solo pedimos las columnas REALES de la tabla devices.
-        $columnsToSelect = 'id,imei,customer_id,last_latitude,last_longitude,last_speed,last_heading,last_connection';
+        // 3. Carga de relaciones (Tu lógica actual corregida)
+        $columnsToSelect = ['id', 'imei', 'customer_id', 'last_latitude', 'last_longitude', 'last_speed', 'last_heading', 'last_connection'];
 
         if ($customer->role === 'admin') {
             $customer->load([
-                // 1. Dispositivos con las columnas nuevas
-                'devices:' . $columnsToSelect,
-
-                // 2. Configuración (Iconos, colores, alias)
+                'devices' => function ($query) use ($columnsToSelect) {
+                    $query->select($columnsToSelect);
+                },
                 'devices.configuration',
-
-                // 3. (Opcional) Si necesitas datos del vehículo real (placa, marca)
                 'devices.vehicle'
             ]);
         } else {
             $customer->load([
-                'sharedDevices:' . $columnsToSelect,
+                'sharedDevices' => function ($query) use ($columnsToSelect) {
+                    $query->select($columnsToSelect);
+                },
                 'sharedDevices.configuration',
                 'sharedDevices.vehicle'
             ]);
