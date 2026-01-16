@@ -231,16 +231,14 @@ class CustomerAuthController extends AppBaseController
     public function customerLoginNuevo(Request $request)
     {
         // 1. Validación corregida
-        $request->validate([
-            // Cambiamos 'phone' por 'string' o 'numeric' para evitar errores de reglas inexistentes
-            'phone'    => 'required|string|min:8',
-            'password' => 'required'
-        ]);
+        // Limpiamos espacios en blanco por si acaso
+        $phone = trim($request->input('phone'));
+        $password = $request->input('password');
 
         // 2. Buscar al cliente
-        $customer = Customer::where('phone', $request->phone)->first();
+        $customer = Customer::where('phone', $phone)->first();
 
-        if (!$customer || !Hash::check($request->password, $customer->password)) {
+        if (!$customer || !Hash::check($password, $customer->password)) {
             return $this->error('Credenciales incorrectas', 401);
         }
 
