@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Device;
 use App\Models\Vehicle;
 use App\Models\SimCard;
+use App\Models\Customer;
 use App\Models\DeviceLog;
 use App\Models\Location;
 use Carbon\Carbon;
@@ -573,6 +574,99 @@ class DeviceController extends Controller
     public function getDevicesByCustomer($customerId): JsonResponse
     {
         try {
+            // 1. Buscamos al cliente para saber su rol
+            $customer = Customer::findOrFail($customerId);
+
+            // 2. Definimos las relaciones a cargar (Agregamos 'configuration')
+            $relations = ['vehicle', 'simCard', 'configuration'];
+
+            // 3. Lógica de consulta según el Rol
+            if ($customer->role === 'admin') {
+                // El ADMIN ve los dispositivos que le pertenecen (customer_id directo)
+                $query = Device::where('customer_id', $customerId);
+            } else {
+                // El MEMBER ve los dispositivos compartidos (tabla pivote device_customer)
+                // Usamos la relación sharedDevices definida en tu modelo Customer
+                $query = $customer->sharedDevices();
+            }
+
+            // 4. Ejecutamos la consulta aplicando los filtros comunes
+            $devices = $query->with($relations)
+                ->where('status', 'active') // Solo activos
+                // ->select(...) // RECOMENDACIÓN: Quita el select específico si usas sharedDevices, 
+                // a veces causa problemas con los ID de la tabla pivote si no se seleccionan bien.
+                // Eloquent optimiza esto bastante bien solo.
+                ->orderBy('created_at', 'desc')
+                ->get();
+
+            // 5. Formatear la respuesta
+            $formattedDevices = $devices->map(function ($device) {
+
+                // Lógica de jerarquía para el NOMBRE:
+                // Prioridad 1: Nombre personalizado en device_configuration
+                // Prioridad 2: Marca y Modelo del Vehículo
+                // Prioridad 3: Fabricante y Modelo del GPS
+
+                $displayName = null;
+
+                if ($device->configuration && $device->configuration->custom_name) {
+                    $displayName = $device->configuration->custom_name;
+                } elseif ($device->vehicle) {
+                    $displayName = $device->vehicle->brand . ' ' . $device->vehicle->model;
+                } else {
+                    $displayName = $device->manufacturer . ' ' . $device->model;
+                }
+
+                return [
+                    'id' => $device->id,
+                    'name' => $displayName,
+
+                    // Agregamos datos visuales de la configuración (útil para el mapa)
+                    'icon' => $device->configuration->marker_icon ?? 'default',
+                    'color' => $device->configuration->color ?? null,
+
+                    'imei' => $device->imei,
+                    'serial_number' => $device->serial_number,
+                    'manufacturer' => $device->manufacturer,
+                    'model' => $device->model,
+                    'status' => $this->mapDeviceStatus($device->status),
+
+                    // Mantienes tus funciones auxiliares
+                    'battery' => $this->getBatteryLevel($device->id),
+                    'lastUpdate' => $this->getLastUpdate($device->id),
+
+                    'vehicle' => $device->vehicle ? [
+                        'id' => $device->vehicle->id,
+                        'plate' => $device->vehicle->plate,
+                        'brand' => $device->vehicle->brand,
+                        'model' => $device->vehicle->model,
+                        'color' => $device->vehicle->color
+                    ] : null,
+
+                    'sim_card' => $device->simCard ? [
+                        'id' => $device->simCard->id,
+                        'number' => $device->simCard->number,
+                        'carrier' => $device->simCard->carrier,
+                        'status' => $device->simCard->status
+                    ] : null
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedDevices,
+                'message' => 'Dispositivos obtenidos exitosamente'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener los dispositivos: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    /* public function getDevicesByCustomer($customerId): JsonResponse
+    {
+        try {
             $devices = Device::with(['vehicle', 'simCard'])
                 ->where('customer_id', $customerId)
                 ->where('status', 'active') // Solo dispositivos activos
@@ -632,7 +726,7 @@ class DeviceController extends Controller
                 'message' => 'Error al obtener los dispositivos del cliente: ' . $e->getMessage()
             ], 500);
         }
-    }
+    } */
 
     /**
      * Map device status to app status
