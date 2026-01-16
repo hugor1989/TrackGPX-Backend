@@ -1120,12 +1120,8 @@ class RouteController extends Controller
         }
     } */
 
-    /**
-     * Función auxiliar para calcular distancia entre dos coordenadas (Haversine)
-     * Retorna kilometros
-     */
-    private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
-        $earthRadius = 6371; // Radio de la tierra en km
+   private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
+        $earthRadius = 6371; 
         
         $dLat = deg2rad($lat2 - $lat1);
         $dLon = deg2rad($lon2 - $lon1);
@@ -1141,29 +1137,36 @@ class RouteController extends Controller
 
     public function getDailyActivityReport(Request $request, $deviceId)
     {
-        // ... Validaciones (igual que antes) ...
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
         ]);
 
-        if ($validator->fails()) return response()->json(['success' => false], 400);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Fechas inválidas'], 400);
+        }
 
         try {
             $device = Device::findOrFail($deviceId);
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // 1. Traemos los datos crudos
-            $locations = Location::select(['id', 'latitude', 'longitude', 'speed', 'battery_level', 'timestamp'])
+            // 1. Obtener datos crudos (Ordenados estrictamente por tiempo)
+            // NO incluimos 'ignition' para evitar el error que tuviste antes
+            $locations = Location::select(['id', 'latitude', 'longitude', 'speed', 'timestamp'])
                 ->where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
-                ->where('latitude', '!=', 0) // Ignorar coordenadas 0,0
-                ->orderBy('timestamp', 'ASC')
+                ->where('latitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC') 
                 ->get();
 
             if ($locations->isEmpty()) {
-                return response()->json(['success' => true, 'daily_activity' => [], 'period_summary' => null]);
+                return response()->json([
+                    'success' => true,
+                    'period_summary' => null,
+                    'daily_activity' => [],
+                    'message' => 'No hay datos'
+                ]);
             }
 
             // 2. Agrupar por día
@@ -1174,82 +1177,77 @@ class RouteController extends Controller
             $dailyActivity = [];
 
             foreach ($dailyData as $date => $dayLocations) {
-                
-                // --- 🧮 CÁLCULO MANUAL DE DISTANCIA (CORRECCIÓN) ---
                 $totalDistance = 0;
                 $movingTime = 0;
+                $stoppedTime = 0;
                 $prevLoc = null;
-                $routes = [];
-                $currentRoute = null;
 
                 foreach ($dayLocations as $loc) {
                     if ($prevLoc) {
-                        // Calcular distancia entre punto anterior y actual
+                        // A. Calcular Distancia Real (Punto A -> Punto B)
                         $dist = $this->calculateDistance(
                             $prevLoc->latitude, $prevLoc->longitude,
                             $loc->latitude, $loc->longitude
                         );
 
-                        // Filtro de ruido: Si saltó más de 1km en segundos (teletransportación) ignorar
-                        // O si la distancia es muy pequeña (ruido estático) ignorar
-                        if ($dist > 0.005 && $dist < 5) { // Mínimo 5 metros, Máximo 5km entre puntos
+                        // Filtro: Ignorar saltos menores a 5 metros (ruido) o mayores a 5km (error GPS)
+                        if ($dist > 0.005 && $dist < 5) {
                             $totalDistance += $dist;
                         }
 
-                        // Lógica de tiempo en movimiento (si velocidad > 3 km/h)
-                        if ($loc->speed > 3) {
-                            $timeDiff = Carbon::parse($loc->timestamp)->diffInSeconds(Carbon::parse($prevLoc->timestamp));
-                            if ($timeDiff < 300) { // Solo sumar si la diferencia es menor a 5 min (evitar saltos largos)
-                                $movingTime += $timeDiff;
+                        // B. Calcular Tiempos (Corrigiendo el bug negativo)
+                        $currentTime = Carbon::parse($loc->timestamp);
+                        $prevTime = Carbon::parse($prevLoc->timestamp);
+
+                        // Solo calculamos si el tiempo avanza hacia adelante
+                        if ($currentTime->gt($prevTime)) {
+                            $secondsDiff = $currentTime->diffInSeconds($prevTime);
+                            
+                            // Ignoramos huecos mayores a 10 minutos (el GPS se apagó)
+                            if ($secondsDiff < 600) {
+                                if ($loc->speed > 3) {
+                                    $movingTime += $secondsDiff;
+                                } else {
+                                    $stoppedTime += $secondsDiff;
+                                }
                             }
                         }
                     }
                     $prevLoc = $loc;
                 }
-                
-                // --- FIN CÁLCULO ---
 
-                // Estadísticas simples
+                // Estadísticas del día
                 $maxSpeed = $dayLocations->max('speed');
-                $avgSpeed = $dayLocations->where('speed', '>', 0)->avg('speed'); // Promedio solo cuando se mueve
+                $avgSpeed = $dayLocations->where('speed', '>', 3)->avg('speed'); // Promedio solo en movimiento
 
-                // Estimación Combustible (Ej: 10 km/L rendimiento promedio)
-                // Lo ideal es tener este valor en la tabla 'vehicles' o 'devices'
-                $kmPerLiter = 10; 
-                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / $kmPerLiter, 1) : 0;
-
-                // Alarmas (Optimizado)
-                $dayStart = Carbon::parse($date)->startOfDay();
-                $dayEnd = Carbon::parse($date)->endOfDay();
-                $alarmsCount = DB::table('notifications')
-                    ->where('customer_id', $device->customer_id) // O device_id si lo tienes
-                    ->whereBetween('created_at', [$dayStart, $dayEnd])
-                    ->count();
+                // Estimación de Gasolina (10 km por litro)
+                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 1) : 0;
 
                 $dailyActivity[] = [
                     'date' => $date,
                     'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
                     'summary' => [
-                        'total_routes' => 0, // Simplificado por ahora
-                        'total_distance_km' => round($totalDistance, 2), // AHORA SÍ SERÁ REAL (ej. 45.5 km)
+                        'total_distance_km' => round($totalDistance, 2),
                         'total_moving_time' => $movingTime,
                         'total_moving_time_human' => $this->secondsToHuman($movingTime),
+                        'total_stopped_time' => $stoppedTime,
+                        'total_stopped_time_human' => $this->secondsToHuman($stoppedTime),
                         'max_speed' => round($maxSpeed, 1),
                         'avg_speed' => round($avgSpeed ?? 0, 1),
-                        'estimated_fuel' => $estimatedFuel, // AHORA SÍ SERÁ REAL (ej. 4.5 Lts)
+                        'estimated_fuel' => $estimatedFuel,
                     ],
-                    'alarms' => ['total' => $alarmsCount],
-                    // Dejamos las rutas vacías o implementamos una lógica simplificada de timeline luego
+                    // Dejamos routes vacío por ahora para no saturar la respuesta JSON
                     'routes' => [] 
                 ];
             }
 
-            // Totales Globales
+            // 3. Totales Globales
             $col = collect($dailyActivity);
             $totalStats = [
                 'total_distance_km' => round($col->sum('summary.total_distance_km'), 2),
                 'total_fuel' => round($col->sum('summary.estimated_fuel'), 1),
                 'total_moving_time_human' => $this->secondsToHuman($col->sum('summary.total_moving_time')),
+                'total_stopped_time_human' => $this->secondsToHuman($col->sum('summary.total_stopped_time')),
                 'avg_speed_period' => round($col->avg('summary.avg_speed'), 1)
             ];
 
