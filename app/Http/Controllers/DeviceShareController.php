@@ -31,7 +31,7 @@ class DeviceShareController extends Controller
 
         // Retornamos la URL que el usuario compartirá por WhatsApp/SMS
         // Supongamos que tienes un frontend web en 'tudominio.com/track/view/{token}'
-        $shareUrl = "https://tudominio.com/live-track/" . $token;
+        $shareUrl = "https://track-gpx.com/live/" . $token;
 
         return response()->json([
             'success' => true,
