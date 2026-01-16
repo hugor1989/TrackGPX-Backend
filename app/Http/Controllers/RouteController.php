@@ -942,201 +942,12 @@ class RouteController extends Controller
         }
     }
 
-    /**
-     * 📊 Reporte de Actividad Diaria
+   /**
+     * 🟢 NUEVO: Reporte de Actividad Blindado contra Errores
      */
-    /* public function getDailyActivityReport(Request $request, $deviceId)
-    {
-        $validator = Validator::make($request->all(), [
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Datos inválidos',
-                'errors' => $validator->errors()
-            ], 400);
-        }
-
-        try {
-            $device = Device::findOrFail($deviceId);
-
-            $startDate = Carbon::parse($request->start_date)->startOfDay();
-            $endDate = Carbon::parse($request->end_date)->endOfDay();
-
-            // Obtener todas las ubicaciones
-            $locations = Location::where('device_id', $device->id)
-                ->whereBetween('timestamp', [$startDate, $endDate])
-                ->where('latitude', '!=', 0)
-                ->where('longitude', '!=', 0)
-                ->orderBy('timestamp', 'ASC')
-                ->get();
-
-            if ($locations->isEmpty()) {
-                return response()->json([
-                    'success' => true,
-                    'daily_activity' => [],
-                    'message' => 'No hay datos en el rango de fechas'
-                ]);
-            }
-
-            // Agrupar por día
-            $dailyData = $locations->groupBy(function ($location) {
-                return Carbon::parse($location->timestamp)->format('Y-m-d');
-            });
-
-            $dailyActivity = [];
-
-            foreach ($dailyData as $date => $dayLocations) {
-                // Detectar rutas del día
-                $dayRoutes = $this->detectMultipleRoutes($dayLocations, 5, $device);
-
-                // Calcular tiempo en movimiento
-                $movingTime = 0;
-                $totalDistance = 0;
-
-                foreach ($dayRoutes as $route) {
-                    $movingTime += $route['statistics']['duration'];
-                    $totalDistance += $route['statistics']['distance'];
-                }
-
-                // Obtener alarmas del día
-                $dayStart = Carbon::parse($date)->startOfDay();
-                $dayEnd = Carbon::parse($date)->endOfDay();
-
-                $alarmsCount = DB::table('notifications')
-                    ->join('devices', 'notifications.customer_id', '=', 'devices.customer_id')
-                    ->where('devices.id', $device->id)
-                    ->whereBetween('notifications.created_at', [$dayStart, $dayEnd])
-                    ->count();
-
-                $alarmsByType = DB::table('notifications')
-                    ->join('devices', 'notifications.customer_id', '=', 'devices.customer_id')
-                    ->where('devices.id', $device->id)
-                    ->whereBetween('notifications.created_at', [$dayStart, $dayEnd])
-                    ->select('type', DB::raw('COUNT(*) as count'))
-                    ->groupBy('type')
-                    ->get()
-                    ->pluck('count', 'type');
-
-                // Estadísticas del día
-                $speeds = $dayLocations->pluck('speed')->filter()->values();
-                $batteries = $dayLocations->pluck('battery_level')->filter()->values();
-
-                $dailyActivity[] = [
-                    'date' => $date,
-                    'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
-                    'summary' => [
-                        'total_routes' => count($dayRoutes),
-                        'total_distance_km' => round($totalDistance, 2),
-                        'total_moving_time' => $movingTime,
-                        'total_moving_time_human' => $this->secondsToHuman($movingTime),
-                        'total_points' => $dayLocations->count(),
-                        'first_activity' => $dayLocations->first()->timestamp->format('H:i:s'),
-                        'last_activity' => $dayLocations->last()->timestamp->format('H:i:s'),
-                    ],
-                    'speed_stats' => [
-                        'avg' => $speeds->count() > 0 ? round($speeds->avg(), 2) : 0,
-                        'max' => $speeds->count() > 0 ? round($speeds->max(), 2) : 0,
-                        'min' => $speeds->count() > 0 ? round($speeds->min(), 2) : 0,
-                    ],
-                    'battery_stats' => [
-                        'avg' => $batteries->count() > 0 ? round($batteries->avg(), 1) : null,
-                        'max' => $batteries->count() > 0 ? $batteries->max() : null,
-                        'min' => $batteries->count() > 0 ? $batteries->min() : null,
-                        'start' => $dayLocations->first()->battery_level,
-                        'end' => $dayLocations->last()->battery_level,
-                        'consumption' => $dayLocations->first()->battery_level - $dayLocations->last()->battery_level,
-                    ],
-                    'alarms' => [
-                        'total' => $alarmsCount,
-                        'by_type' => $alarmsByType,
-                    ],
-                    'routes' => array_map(function ($route) {
-                        return [
-                            'id' => $route['id'],
-                            'start_time' => $route['start_time'],
-                            'end_time' => $route['end_time'],
-                            'distance_km' => $route['statistics']['distance'],
-                            'duration' => $route['statistics']['duration_human'],
-                            'avg_speed' => $route['statistics']['avg_speed'],
-                            'max_speed' => $route['statistics']['max_speed'],
-                            'points_count' => $route['statistics']['total_points'],
-                        ];
-                    }, $dayRoutes),
-                ];
-            }
-
-            // Calcular totales del período
-            $totalRoutes = array_sum(array_map(function ($day) {
-                return $day['summary']['total_routes'];
-            }, $dailyActivity));
-
-            $totalStats = [
-                'total_days' => count($dailyActivity),
-                'total_routes' => $totalRoutes,
-                'total_distance_km' => round(array_sum(array_map(function ($day) {
-                    return $day['summary']['total_distance_km'];
-                }, $dailyActivity)), 2),
-                'total_moving_time' => array_sum(array_map(function ($day) {
-                    return $day['summary']['total_moving_time'];
-                }, $dailyActivity)),
-                'total_alarms' => array_sum(array_map(function ($day) {
-                    return $day['alarms']['total'];
-                }, $dailyActivity)),
-                'avg_distance_per_day' => count($dailyActivity) > 0 ? round(array_sum(array_map(function ($day) {
-                    return $day['summary']['total_distance_km'];
-                }, $dailyActivity)) / count($dailyActivity), 2) : 0,
-            ];
-
-            $totalStats['total_moving_time_human'] = $this->secondsToHuman($totalStats['total_moving_time']);
-
-            return response()->json([
-                'success' => true,
-                'device' => [
-                    'id' => $device->id,
-                    'name' => $device->name,
-                ],
-                'date_range' => [
-                    'start' => $startDate->toISOString(),
-                    'end' => $endDate->toISOString(),
-                ],
-                'period_summary' => $totalStats,
-                'daily_activity' => $dailyActivity,
-                'message' => 'Reporte generado correctamente'
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Error en getDailyActivityReport:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al obtener reporte: ' . $e->getMessage()
-            ], 500);
-        }
-    } */
-
-   private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
-        $earthRadius = 6371; 
-        
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLon = deg2rad($lon2 - $lon1);
-        
-        $a = sin($dLat/2) * sin($dLat/2) +
-             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-             sin($dLon/2) * sin($dLon/2);
-             
-        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
-        
-        return $earthRadius * $c;
-    }
-
     public function getDailyActivityReport(Request $request, $deviceId)
     {
+        // 1. Validaciones básicas
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
@@ -1151,9 +962,9 @@ class RouteController extends Controller
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // 1. Obtener datos crudos (Ordenados estrictamente por tiempo)
-            // NO incluimos 'ignition' para evitar el error que tuviste antes
-            $locations = Location::select(['id', 'latitude', 'longitude', 'speed', 'timestamp'])
+            // 2. Obtener datos crudos (Solo columnas necesarias)
+            // IMPORTANTE: orderBy ASC es vital para evitar tiempos negativos
+            $locations = Location::select(['latitude', 'longitude', 'speed', 'timestamp'])
                 ->where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
@@ -1169,7 +980,7 @@ class RouteController extends Controller
                 ]);
             }
 
-            // 2. Agrupar por día
+            // 3. Agrupar por día
             $dailyData = $locations->groupBy(function ($location) {
                 return Carbon::parse($location->timestamp)->format('Y-m-d');
             });
@@ -1178,77 +989,86 @@ class RouteController extends Controller
 
             foreach ($dailyData as $date => $dayLocations) {
                 $totalDistance = 0;
-                $movingTime = 0;
-                $stoppedTime = 0;
+                $movingSeconds = 0;
+                $stoppedSeconds = 0;
                 $prevLoc = null;
 
                 foreach ($dayLocations as $loc) {
                     if ($prevLoc) {
-                        // A. Calcular Distancia Real (Punto A -> Punto B)
+                        // A. Validación Temporal (Evitar negativos)
+                        $currentTime = Carbon::parse($loc->timestamp);
+                        $prevTime = Carbon::parse($prevLoc->timestamp);
+
+                        // Si el punto actual es anterior al previo (error GPS), lo saltamos.
+                        if ($currentTime->lte($prevTime)) {
+                            continue; 
+                        }
+
+                        $secondsDiff = $currentTime->diffInSeconds($prevTime);
+
+                        // Si la diferencia es mayor a 30 min (1800s), asumimos que se apagó.
+                        // No sumamos ese tiempo a nada.
+                        if ($secondsDiff > 1800) { 
+                            $prevLoc = $loc; 
+                            continue;
+                        }
+
+                        // B. Calcular Distancia Real (Punto A -> Punto B)
                         $dist = $this->calculateDistance(
                             $prevLoc->latitude, $prevLoc->longitude,
                             $loc->latitude, $loc->longitude
                         );
 
-                        // Filtro: Ignorar saltos menores a 5 metros (ruido) o mayores a 5km (error GPS)
-                        if ($dist > 0.005 && $dist < 5) {
+                        // Filtro de ruido: Ignorar movimientos menores a 10m (GPS drift)
+                        if ($dist > 0.010 && $dist < 5) {
                             $totalDistance += $dist;
                         }
 
-                        // B. Calcular Tiempos (Corrigiendo el bug negativo)
-                        $currentTime = Carbon::parse($loc->timestamp);
-                        $prevTime = Carbon::parse($prevLoc->timestamp);
-
-                        // Solo calculamos si el tiempo avanza hacia adelante
-                        if ($currentTime->gt($prevTime)) {
-                            $secondsDiff = $currentTime->diffInSeconds($prevTime);
-                            
-                            // Ignoramos huecos mayores a 10 minutos (el GPS se apagó)
-                            if ($secondsDiff < 600) {
-                                if ($loc->speed > 3) {
-                                    $movingTime += $secondsDiff;
-                                } else {
-                                    $stoppedTime += $secondsDiff;
-                                }
-                            }
+                        // C. Clasificar Tiempo (Lógica de Negocio)
+                        if ($loc->speed >= 3) {
+                            // Si va a más de 3km/h, cuenta como movimiento
+                            $movingSeconds += $secondsDiff;
+                        } else {
+                            // Si velocidad es 0-2km/h, cuenta como detenido (tráfico/espera)
+                            $stoppedSeconds += $secondsDiff;
                         }
                     }
                     $prevLoc = $loc;
                 }
 
-                // Estadísticas del día
-                $maxSpeed = $dayLocations->max('speed');
-                $avgSpeed = $dayLocations->where('speed', '>', 3)->avg('speed'); // Promedio solo en movimiento
-
-                // Estimación de Gasolina (10 km por litro)
-                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 1) : 0;
+                // Cálculos finales del día
+                // Estimación: 10 km por litro (ajustable)
+                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 2) : 0; 
 
                 $dailyActivity[] = [
                     'date' => $date,
                     'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
                     'summary' => [
                         'total_distance_km' => round($totalDistance, 2),
-                        'total_moving_time' => $movingTime,
-                        'total_moving_time_human' => $this->secondsToHuman($movingTime),
-                        'total_stopped_time' => $stoppedTime,
-                        'total_stopped_time_human' => $this->secondsToHuman($stoppedTime),
-                        'max_speed' => round($maxSpeed, 1),
-                        'avg_speed' => round($avgSpeed ?? 0, 1),
+                        'total_moving_time_human' => $this->secondsToHumanN($movingSeconds),
+                        'total_stopped_time_human' => $this->secondsToHumanN($stoppedSeconds),
+                        'max_speed' => round($dayLocations->max('speed'), 1),
                         'estimated_fuel' => $estimatedFuel,
                     ],
-                    // Dejamos routes vacío por ahora para no saturar la respuesta JSON
-                    'routes' => [] 
+                    'routes' => [] // Dejamos vacío para no saturar JSON
                 ];
             }
 
-            // 3. Totales Globales
+            // 4. Totales Globales
             $col = collect($dailyActivity);
             $totalStats = [
                 'total_distance_km' => round($col->sum('summary.total_distance_km'), 2),
                 'total_fuel' => round($col->sum('summary.estimated_fuel'), 1),
-                'total_moving_time_human' => $this->secondsToHuman($col->sum('summary.total_moving_time')),
-                'total_stopped_time_human' => $this->secondsToHuman($col->sum('summary.total_stopped_time')),
-                'avg_speed_period' => round($col->avg('summary.avg_speed'), 1)
+                
+                // Recalcular tiempos humanos totales
+                'total_moving_time_human' => $this->secondsToHumanN($col->sum(function($day){ 
+                    return $this->humanToSeconds($day['summary']['total_moving_time_human']); 
+                })),
+                'total_stopped_time_human' => $this->secondsToHumanN($col->sum(function($day){ 
+                    return $this->humanToSeconds($day['summary']['total_stopped_time_human']); 
+                })),
+                
+                'avg_speed_period' => round($col->avg('summary.max_speed'), 1) // Usamos max promedio como referencia
             ];
 
             return response()->json([
@@ -1260,6 +1080,31 @@ class RouteController extends Controller
         } catch (\Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+    }
+
+    // --- HELPERS PRIVADOS ---
+
+    private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
+        $earthRadius = 6371; 
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lon2 - $lon1);
+        $a = sin($dLat/2) * sin($dLat/2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon/2) * sin($dLon/2);
+        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
+        return $earthRadius * $c;
+    }
+
+    private function secondsToHumanN($seconds) {
+        if ($seconds <= 0) return "0h 0m";
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        return "{$hours}h {$minutes}m";
+    }
+
+    // Pequeño truco para sumar los strings "2h 30m" al final
+    private function humanToSeconds($humanTime) {
+        if(!$humanTime) return 0;
+        sscanf($humanTime, "%dh %dm", $hours, $minutes);
+        return ($hours * 3600) + ($minutes * 60);
     }
 
    
