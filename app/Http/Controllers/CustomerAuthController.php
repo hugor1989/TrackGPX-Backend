@@ -242,8 +242,17 @@ class CustomerAuthController extends AppBaseController
             return $this->error('Credenciales incorrectas', 401);
         }
 
-        // 3. Carga de relaciones (Tu lógica actual corregida)
-        $columnsToSelect = ['id', 'imei', 'customer_id', 'last_latitude', 'last_longitude', 'last_speed', 'last_heading', 'last_connection'];
+        // ✅ SOLUCIÓN: Agregamos el prefijo 'devices.' a las columnas
+        $columnsToSelect = [
+            'devices.id', // <--- Especificamos que es de la tabla devices
+            'devices.imei',
+            'devices.customer_id',
+            'devices.last_latitude',
+            'devices.last_longitude',
+            'devices.last_speed',
+            'devices.last_heading',
+            'devices.last_connection'
+        ];
 
         if ($customer->role === 'admin') {
             $customer->load([
@@ -254,6 +263,7 @@ class CustomerAuthController extends AppBaseController
                 'devices.vehicle'
             ]);
         } else {
+            // En sharedDevices es donde usualmente ocurre el error de ambigüedad
             $customer->load([
                 'sharedDevices' => function ($query) use ($columnsToSelect) {
                     $query->select($columnsToSelect);
