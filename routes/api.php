@@ -21,7 +21,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AdminDashboardController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\MemberController;
-
+use App\Http\Controllers\DeviceShareController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -213,6 +213,10 @@ Route::middleware('auth:customer')->group(function () {
         Route::get('/devices', [DashboardController::class, 'getDevices']);
         Route::get('/device/{deviceId}/details', [DashboardController::class, 'getDeviceDetails']);
     });
+
+
+    //Crear enlace de compartición
+    Route::post('device/create-share-link', [DeviceShareController::class, 'createShareLink']);
 });
 
 #endregion
@@ -222,5 +226,8 @@ Route::post('auto/devices/auto-register', [DeviceController::class, 'autoRegiste
 Route::post('auto/locations/insert', [LocationController::class, 'createInsertLocations']);
 Route::get('devices/imei/{imei}/id', [DeviceController::class, 'getIdByImei']);
 Route::get('devices/{id}/alarms', [DeviceController::class, 'getAlarms']);
+
+// Ruta PÚBLICA (sin auth) para LEER la ubicación usando el token
+Route::get('share/view/{token}', [DeviceShareController::class, 'getSharedLocation']);
 
 #endregion
