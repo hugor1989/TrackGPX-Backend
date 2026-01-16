@@ -230,35 +230,34 @@ class CustomerAuthController extends AppBaseController
 
     public function customerLoginNuevo(Request $request)
     {
-        $request->validate([
-            'phone'    => 'required|phone',
-            'password' => 'required'
-        ]);
+        // 1. Validación corregida
+        // Limpiamos espacios en blanco por si acaso
+        $phone = trim($request->input('phone'));
+        $password = $request->input('password');
 
-        $customer = Customer::where('phone', $request->phone)->first();
+        // 2. Buscar al cliente
+        $customer = Customer::where('phone', $phone)->first();
 
-        if (!$customer || !Hash::check($request->password, $customer->password)) {
+        if (!$customer || !Hash::check($password, $customer->password)) {
             return $this->error('Credenciales incorrectas', 401);
         }
 
-        // ✅ CORRECCIÓN: Quitamos 'vehicle_name' porque no existe en la tabla.
-        // Solo pedimos las columnas REALES de la tabla devices.
-        $columnsToSelect = 'id,imei,customer_id,last_latitude,last_longitude,last_speed,last_heading,last_connection';
+        // 3. Carga de relaciones (Tu lógica actual corregida)
+        $columnsToSelect = ['id', 'imei', 'customer_id', 'last_latitude', 'last_longitude', 'last_speed', 'last_heading', 'last_connection'];
 
         if ($customer->role === 'admin') {
             $customer->load([
-                // 1. Dispositivos con las columnas nuevas
-                'devices:' . $columnsToSelect,
-
-                // 2. Configuración (Iconos, colores, alias)
+                'devices' => function ($query) use ($columnsToSelect) {
+                    $query->select($columnsToSelect);
+                },
                 'devices.configuration',
-
-                // 3. (Opcional) Si necesitas datos del vehículo real (placa, marca)
                 'devices.vehicle'
             ]);
         } else {
             $customer->load([
-                'sharedDevices:' . $columnsToSelect,
+                'sharedDevices' => function ($query) use ($columnsToSelect) {
+                    $query->select($columnsToSelect);
+                },
                 'sharedDevices.configuration',
                 'sharedDevices.vehicle'
             ]);
