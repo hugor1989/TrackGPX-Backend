@@ -943,11 +943,11 @@ class RouteController extends Controller
     }
 
    /**
-     * 🟢 NUEVO: Reporte de Actividad Blindado contra Errores
+     * Reporte de Actividad Diaria (Basado en lógica de Rutas)
+     * Elimina negativos y distancias falsas.
      */
     public function getDailyActivityReport(Request $request, $deviceId)
     {
-        // 1. Validaciones básicas
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
@@ -959,11 +959,12 @@ class RouteController extends Controller
 
         try {
             $device = Device::findOrFail($deviceId);
+            // Aseguramos inicio y fin del día
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // 2. Obtener datos crudos (Solo columnas necesarias)
-            // IMPORTANTE: orderBy ASC es vital para evitar tiempos negativos
+            // 1. OBTENCIÓN DE DATOS
+            // Ordenamos ASC para que el tiempo siempre avance (evita negativos)
             $locations = Location::select(['latitude', 'longitude', 'speed', 'timestamp'])
                 ->where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
@@ -980,7 +981,7 @@ class RouteController extends Controller
                 ]);
             }
 
-            // 3. Agrupar por día
+            // 2. AGRUPAR POR DÍA
             $dailyData = $locations->groupBy(function ($location) {
                 return Carbon::parse($location->timestamp)->format('Y-m-d');
             });
@@ -988,48 +989,50 @@ class RouteController extends Controller
             $dailyActivity = [];
 
             foreach ($dailyData as $date => $dayLocations) {
+                // Variables del día
                 $totalDistance = 0;
                 $movingSeconds = 0;
                 $stoppedSeconds = 0;
                 $prevLoc = null;
 
+                // Iteramos los puntos del día
                 foreach ($dayLocations as $loc) {
                     if ($prevLoc) {
-                        // A. Validación Temporal (Evitar negativos)
                         $currentTime = Carbon::parse($loc->timestamp);
                         $prevTime = Carbon::parse($prevLoc->timestamp);
 
-                        // Si el punto actual es anterior al previo (error GPS), lo saltamos.
+                        // --- SANITIZACIÓN DE TIEMPO ---
+                        // Si el punto actual es anterior al previo (error del GPS), lo ignoramos.
                         if ($currentTime->lte($prevTime)) {
                             continue; 
                         }
 
                         $secondsDiff = $currentTime->diffInSeconds($prevTime);
 
-                        // Si la diferencia es mayor a 30 min (1800s), asumimos que se apagó.
-                        // No sumamos ese tiempo a nada.
-                        if ($secondsDiff > 1800) { 
+                        // Si hay un salto de más de 20 min (1200s), asumimos que se apagó/perdió señal.
+                        // No sumamos ese tiempo como "detenido" ni "movimiento", es tiempo muerto.
+                        if ($secondsDiff > 1200) { 
                             $prevLoc = $loc; 
                             continue;
                         }
 
-                        // B. Calcular Distancia Real (Punto A -> Punto B)
-                        $dist = $this->calculateDistance(
+                        // --- CÁLCULO DE DISTANCIA ---
+                        $dist = $this->calculateHaversineDistance(
                             $prevLoc->latitude, $prevLoc->longitude,
                             $loc->latitude, $loc->longitude
                         );
 
-                        // Filtro de ruido: Ignorar movimientos menores a 10m (GPS drift)
-                        if ($dist > 0.010 && $dist < 5) {
-                            $totalDistance += $dist;
+                        // Filtro de "Drift" (Ruido):
+                        // Si se movió menos de 5 metros, es ruido. Si saltó más de 2km en segundos, es error.
+                        if ($dist > 0.005 && $dist < 2.0) {
+                            $totalDistance += $dist; // Sumamos km
                         }
 
-                        // C. Clasificar Tiempo (Lógica de Negocio)
+                        // --- CLASIFICACIÓN DE ESTADO ---
+                        // Usamos velocidad > 3km/h para determinar movimiento
                         if ($loc->speed >= 3) {
-                            // Si va a más de 3km/h, cuenta como movimiento
                             $movingSeconds += $secondsDiff;
                         } else {
-                            // Si velocidad es 0-2km/h, cuenta como detenido (tráfico/espera)
                             $stoppedSeconds += $secondsDiff;
                         }
                     }
@@ -1037,8 +1040,7 @@ class RouteController extends Controller
                 }
 
                 // Cálculos finales del día
-                // Estimación: 10 km por litro (ajustable)
-                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 2) : 0; 
+                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 2) : 0; // 10 km/L rendimiento
 
                 $dailyActivity[] = [
                     'date' => $date,
@@ -1049,26 +1051,23 @@ class RouteController extends Controller
                         'total_stopped_time_human' => $this->secondsToHumanN($stoppedSeconds),
                         'max_speed' => round($dayLocations->max('speed'), 1),
                         'estimated_fuel' => $estimatedFuel,
-                    ],
-                    'routes' => [] // Dejamos vacío para no saturar JSON
+                    ]
                 ];
             }
 
-            // 4. Totales Globales
+            // 3. TOTALES DEL PERIODO (Sumar lo procesado por día)
             $col = collect($dailyActivity);
+            
+            // Helper para sumar tiempos humanos
+            $totalMovingSeconds = $col->sum(function($d) { return $this->humanToSeconds($d['summary']['total_moving_time_human']); });
+            $totalStoppedSeconds = $col->sum(function($d) { return $this->humanToSeconds($d['summary']['total_stopped_time_human']); });
+
             $totalStats = [
                 'total_distance_km' => round($col->sum('summary.total_distance_km'), 2),
                 'total_fuel' => round($col->sum('summary.estimated_fuel'), 1),
-                
-                // Recalcular tiempos humanos totales
-                'total_moving_time_human' => $this->secondsToHumanN($col->sum(function($day){ 
-                    return $this->humanToSeconds($day['summary']['total_moving_time_human']); 
-                })),
-                'total_stopped_time_human' => $this->secondsToHumanN($col->sum(function($day){ 
-                    return $this->humanToSeconds($day['summary']['total_stopped_time_human']); 
-                })),
-                
-                'avg_speed_period' => round($col->avg('summary.max_speed'), 1) // Usamos max promedio como referencia
+                'total_moving_time_human' => $this->secondsToHumanN($totalMovingSeconds),
+                'total_stopped_time_human' => $this->secondsToHumanN($totalStoppedSeconds),
+                'avg_speed_period' => round($col->avg('summary.max_speed'), 1)
             ];
 
             return response()->json([
@@ -1082,17 +1081,9 @@ class RouteController extends Controller
         }
     }
 
-    // --- HELPERS PRIVADOS ---
+    // --- HELPERS (Mételos al final de la clase si no los tienes) ---
 
-    private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
-        $earthRadius = 6371; 
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLon = deg2rad($lon2 - $lon1);
-        $a = sin($dLat/2) * sin($dLat/2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon/2) * sin($dLon/2);
-        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
-        return $earthRadius * $c;
-    }
-
+    
     private function secondsToHumanN($seconds) {
         if ($seconds <= 0) return "0h 0m";
         $hours = floor($seconds / 3600);
@@ -1100,11 +1091,10 @@ class RouteController extends Controller
         return "{$hours}h {$minutes}m";
     }
 
-    // Pequeño truco para sumar los strings "2h 30m" al final
-    private function humanToSeconds($humanTime) {
-        if(!$humanTime) return 0;
-        sscanf($humanTime, "%dh %dm", $hours, $minutes);
-        return ($hours * 3600) + ($minutes * 60);
+    private function humanToSeconds($str) {
+        if (!$str) return 0;
+        sscanf($str, "%dh %dm", $h, $m);
+        return ($h * 3600) + ($m * 60);
     }
 
    
