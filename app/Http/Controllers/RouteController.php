@@ -866,11 +866,12 @@ class RouteController extends Controller
         if ($locations->isEmpty()) {
             return response()->json([
                 'success' => true,
+                'summary' => null,
                 'days' => [],
             ]);
         }
 
-        // 🔥 USAR TU LÓGICA EXISTENTE
+        // 🔥 TU LÓGICA REAL (NO SE TOCA)
         $routes = $this->detectMultipleRoutes(
             $locations,
             $request->max_interval_minutes ?? 5,
@@ -881,24 +882,40 @@ class RouteController extends Controller
         $days = collect($routes)->groupBy(function ($route) {
             return Carbon::parse($route['start_time'])->toDateString();
         })->map(function ($routes, $date) {
+
+            $activeMinutes = collect($routes)->sum(function ($r) {
+                return Carbon::parse($r['start_time'])
+                    ->diffInMinutes(Carbon::parse($r['end_time']));
+            });
+
             return [
                 'date' => $date,
-                'label' => Carbon::parse($date)->translatedFormat('l d'),
+                'label' => Carbon::parse($date)
+                    ->locale('es')
+                    ->translatedFormat('l d F'),
                 'routes_count' => count($routes),
-                'total_distance_km' => round(
+                'distance_km' => round(
                     collect($routes)->sum(fn($r) => $r['statistics']['distance']),
                     2
                 ),
                 'start_time' => min(array_column($routes->toArray(), 'start_time')),
                 'end_time' => max(array_column($routes->toArray(), 'end_time')),
+                'active_minutes' => $activeMinutes,
             ];
         })->values();
 
         return response()->json([
             'success' => true,
+            'summary' => [
+                'total_distance_km' => round($days->sum('distance_km'), 2),
+                'total_routes' => $days->sum('routes_count'),
+                'active_days' => $days->count(),
+                'total_active_minutes' => $days->sum('active_minutes'),
+            ],
             'days' => $days,
         ]);
     }
+
 
 
     /**
