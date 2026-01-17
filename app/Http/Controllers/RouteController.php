@@ -943,8 +943,7 @@ class RouteController extends Controller
     }
 
    /**
-     * Reporte de Actividad Diaria (Basado en lógica de Rutas)
-     * Elimina negativos y distancias falsas.
+     * Reporte Diario con Desglose de Rutas (Corte por inactividad de 5 min)
      */
     public function getDailyActivityReport(Request $request, $deviceId)
     {
@@ -953,120 +952,101 @@ class RouteController extends Controller
             'end_date' => 'required|date|after_or_equal:start_date',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => 'Fechas inválidas'], 400);
-        }
+        if ($validator->fails()) return response()->json(['success' => false], 400);
 
         try {
             $device = Device::findOrFail($deviceId);
-            // Aseguramos inicio y fin del día
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // 1. OBTENCIÓN DE DATOS
-            // Ordenamos ASC para que el tiempo siempre avance (evita negativos)
+            // 1. Obtener puntos ordenados cronológicamente
             $locations = Location::select(['latitude', 'longitude', 'speed', 'timestamp'])
                 ->where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->where('latitude', '!=', 0)
-                ->orderBy('timestamp', 'ASC') 
+                ->orderBy('timestamp', 'ASC')
                 ->get();
 
             if ($locations->isEmpty()) {
-                return response()->json([
-                    'success' => true,
-                    'period_summary' => null,
-                    'daily_activity' => [],
-                    'message' => 'No hay datos'
-                ]);
+                return response()->json(['success' => true, 'daily_activity' => [], 'period_summary' => null]);
             }
 
-            // 2. AGRUPAR POR DÍA
-            $dailyData = $locations->groupBy(function ($location) {
-                return Carbon::parse($location->timestamp)->format('Y-m-d');
+            // 2. Agrupar por Día
+            $dailyData = $locations->groupBy(function ($loc) {
+                return Carbon::parse($loc->timestamp)->format('Y-m-d');
             });
 
             $dailyActivity = [];
 
             foreach ($dailyData as $date => $dayLocations) {
                 // Variables del día
-                $totalDistance = 0;
-                $movingSeconds = 0;
-                $stoppedSeconds = 0;
-                $prevLoc = null;
+                $dayRoutes = [];
+                
+                // Variables temporales para la ruta actual
+                $currentRoutePoints = [];
+                $lastLoc = null;
 
-                // Iteramos los puntos del día
+                // --- ALGORITMO DE DETECCIÓN DE RUTAS (5 MINUTOS) ---
                 foreach ($dayLocations as $loc) {
-                    if ($prevLoc) {
-                        $currentTime = Carbon::parse($loc->timestamp);
-                        $prevTime = Carbon::parse($prevLoc->timestamp);
+                    $currentTime = Carbon::parse($loc->timestamp);
+                    
+                    if ($lastLoc) {
+                        $lastTime = Carbon::parse($lastLoc->timestamp);
+                        $diffSeconds = $currentTime->diffInSeconds($lastTime);
 
-                        // --- SANITIZACIÓN DE TIEMPO ---
-                        // Si el punto actual es anterior al previo (error del GPS), lo ignoramos.
-                        if ($currentTime->lte($prevTime)) {
-                            continue; 
-                        }
-
-                        $secondsDiff = $currentTime->diffInSeconds($prevTime);
-
-                        // Si hay un salto de más de 20 min (1200s), asumimos que se apagó/perdió señal.
-                        // No sumamos ese tiempo como "detenido" ni "movimiento", es tiempo muerto.
-                        if ($secondsDiff > 1200) { 
-                            $prevLoc = $loc; 
-                            continue;
-                        }
-
-                        // --- CÁLCULO DE DISTANCIA ---
-                        $dist = $this->calculateHaversineDistance(
-                            $prevLoc->latitude, $prevLoc->longitude,
-                            $loc->latitude, $loc->longitude
-                        );
-
-                        // Filtro de "Drift" (Ruido):
-                        // Si se movió menos de 5 metros, es ruido. Si saltó más de 2km en segundos, es error.
-                        if ($dist > 0.005 && $dist < 2.0) {
-                            $totalDistance += $dist; // Sumamos km
-                        }
-
-                        // --- CLASIFICACIÓN DE ESTADO ---
-                        // Usamos velocidad > 3km/h para determinar movimiento
-                        if ($loc->speed >= 3) {
-                            $movingSeconds += $secondsDiff;
-                        } else {
-                            $stoppedSeconds += $secondsDiff;
+                        // SI PASARON MÁS DE 5 MINUTOS (300s) SIN DATOS -> CERRAR RUTA ANTERIOR
+                        if ($diffSeconds > 300) {
+                            if (count($currentRoutePoints) > 1) {
+                                $dayRoutes[] = $this->processRoute($currentRoutePoints);
+                            }
+                            // Reiniciar para nueva ruta
+                            $currentRoutePoints = [];
                         }
                     }
-                    $prevLoc = $loc;
+
+                    // Agregar punto a la ruta actual
+                    $currentRoutePoints[] = $loc;
+                    $lastLoc = $loc;
                 }
 
-                // Cálculos finales del día
-                $estimatedFuel = $totalDistance > 0 ? round($totalDistance / 10, 2) : 0; // 10 km/L rendimiento
+                // Guardar la última ruta pendiente al final del día
+                if (count($currentRoutePoints) > 1) {
+                    $dayRoutes[] = $this->processRoute($currentRoutePoints);
+                }
+
+                // --- CÁLCULO DE TOTALES DEL DÍA (Sumando las rutas detectadas) ---
+                $dayDistance = 0;
+                $dayMovingTime = 0;
+                $dayFuel = 0;
+                $dayMaxSpeed = 0;
+
+                foreach ($dayRoutes as $route) {
+                    $dayDistance += $route['distance_km'];
+                    $dayMovingTime += $route['duration_seconds']; // Aquí duration es tiempo real de ruta
+                    $dayFuel += $route['estimated_fuel'];
+                    if ($route['max_speed'] > $dayMaxSpeed) $dayMaxSpeed = $route['max_speed'];
+                }
 
                 $dailyActivity[] = [
                     'date' => $date,
                     'day_name' => Carbon::parse($date)->locale('es')->translatedFormat('l'),
                     'summary' => [
-                        'total_distance_km' => round($totalDistance, 2),
-                        'total_moving_time_human' => $this->secondsToHumanN($movingSeconds),
-                        'total_stopped_time_human' => $this->secondsToHumanN($stoppedSeconds),
-                        'max_speed' => round($dayLocations->max('speed'), 1),
-                        'estimated_fuel' => $estimatedFuel,
-                    ]
+                        'total_routes' => count($dayRoutes),
+                        'total_distance_km' => round($dayDistance, 2),
+                        'total_moving_time_human' => $this->secondsToHuman($dayMovingTime),
+                        'max_speed' => $dayMaxSpeed,
+                        'estimated_fuel' => round($dayFuel, 2),
+                    ],
+                    'routes' => $dayRoutes // Aquí va el detalle de las N rutas
                 ];
             }
 
-            // 3. TOTALES DEL PERIODO (Sumar lo procesado por día)
+            // 3. Totales Globales del Periodo
             $col = collect($dailyActivity);
-            
-            // Helper para sumar tiempos humanos
-            $totalMovingSeconds = $col->sum(function($d) { return $this->humanToSeconds($d['summary']['total_moving_time_human']); });
-            $totalStoppedSeconds = $col->sum(function($d) { return $this->humanToSeconds($d['summary']['total_stopped_time_human']); });
-
             $totalStats = [
                 'total_distance_km' => round($col->sum('summary.total_distance_km'), 2),
                 'total_fuel' => round($col->sum('summary.estimated_fuel'), 1),
-                'total_moving_time_human' => $this->secondsToHumanN($totalMovingSeconds),
-                'total_stopped_time_human' => $this->secondsToHumanN($totalStoppedSeconds),
+                'total_routes' => $col->sum('summary.total_routes'),
                 'avg_speed_period' => round($col->avg('summary.max_speed'), 1)
             ];
 
@@ -1081,21 +1061,54 @@ class RouteController extends Controller
         }
     }
 
-    // --- HELPERS (Mételos al final de la clase si no los tienes) ---
+    /**
+     * Procesa un array de puntos y retorna las estadísticas de ESA ruta específica
+     */
+    private function processRoute($points) {
+        $dist = 0;
+        $maxSpeed = 0;
+        $prev = null;
+        
+        $startTime = Carbon::parse($points[0]->timestamp);
+        $endTime = Carbon::parse(end($points)->timestamp);
+        $duration = $endTime->diffInSeconds($startTime);
 
-    
-    private function secondsToHumanN($seconds) {
-        if ($seconds <= 0) return "0h 0m";
-        $hours = floor($seconds / 3600);
-        $minutes = floor(($seconds % 3600) / 60);
-        return "{$hours}h {$minutes}m";
+        foreach ($points as $p) {
+            if ($prev) {
+                // Haversine
+                $d = $this->calculateDistance($prev->latitude, $prev->longitude, $p->latitude, $p->longitude);
+                if ($d > 0.005 && $d < 5.0) $dist += $d;
+            }
+            if ($p->speed > $maxSpeed) $maxSpeed = $p->speed;
+            $prev = $p;
+        }
+
+        return [
+            'start_time' => $startTime->format('H:i'),
+            'end_time' => $endTime->format('H:i'),
+            'duration_seconds' => $duration,
+            'duration_human' => $this->secondsToHuman($duration),
+            'distance_km' => round($dist, 2),
+            'max_speed' => round($maxSpeed, 1),
+            'estimated_fuel' => $dist > 0 ? round($dist / 10, 2) : 0,
+            'point_count' => count($points)
+        ];
     }
 
-    private function humanToSeconds($str) {
-        if (!$str) return 0;
-        sscanf($str, "%dh %dm", $h, $m);
-        return ($h * 3600) + ($m * 60);
+    private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
+        $earthRadius = 6371; 
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lon2 - $lon1);
+        $a = sin($dLat/2) * sin($dLat/2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon/2) * sin($dLon/2);
+        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
+        return $earthRadius * $c;
     }
 
+    /* private function secondsToHuman($seconds) {
+        $h = floor($seconds / 3600);
+        $m = floor(($seconds % 3600) / 60);
+        return "{$h}h {$m}m";
+    }
+ */
    
 }
