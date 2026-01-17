@@ -942,158 +942,136 @@ class RouteController extends Controller
         }
     }
 
-   public function getDailyActivityReport(Request $request, $deviceId)
+    public function getDailyActivityReport(Request $request, $deviceId)
     {
-        $validator = Validator::make($request->all(), [
+        $request->validate([
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
         ]);
 
-        if ($validator->fails()) return response()->json(['success' => false, 'message' => 'Fechas inválidas'], 400);
+        $timezone = 'America/Mexico_City';
 
-        try {
-            $device = Device::findOrFail($deviceId);
-            
-            // 1. CONFIGURACIÓN DE ZONA HORARIA
-            // Esto es vital para que "Viernes" sea Viernes en México, no en Londres.
-            $timezone = 'America/Mexico_City'; 
+        $start = Carbon::parse($request->start_date, $timezone)->startOfDay()->setTimezone('UTC');
+        $end   = Carbon::parse($request->end_date, $timezone)->endOfDay()->setTimezone('UTC');
 
-            // Convertimos las fechas recibidas (asumidas en local) a UTC para buscar en la BD
-            $startDate = Carbon::parse($request->start_date, $timezone)->startOfDay()->setTimezone('UTC');
-            $endDate = Carbon::parse($request->end_date, $timezone)->endOfDay()->setTimezone('UTC');
+        $device = Device::findOrFail($deviceId);
 
-            // 2. CONSULTA (En UTC)
-            $locations = Location::select(['latitude', 'longitude', 'speed', 'timestamp'])
-                ->where('device_id', $device->id)
-                ->whereBetween('timestamp', [$startDate, $endDate])
-                ->where('latitude', '!=', 0)
-                ->orderBy('timestamp', 'ASC')
-                ->get();
+        $locations = Location::where('device_id', $device->id)
+            ->whereBetween('timestamp', [$start, $end])
+            ->where('latitude', '!=', 0)
+            ->orderBy('timestamp')
+            ->get();
 
-            if ($locations->isEmpty()) {
-                return response()->json(['success' => true, 'daily_activity' => [], 'period_summary' => null]);
-            }
-
-            // 3. AGRUPAR POR DÍA (Convirtiendo a hora Local)
-            $dailyData = $locations->groupBy(function ($loc) use ($timezone) {
-                return Carbon::parse($loc->timestamp)->setTimezone($timezone)->format('Y-m-d');
-            });
-
-            $dailyActivity = [];
-
-            foreach ($dailyData as $date => $dayLocations) {
-                // Algoritmo de detección de rutas (Corte de 5 min)
-                $routes = [];
-                $currentRoute = [];
-                $lastLoc = null;
-
-                foreach ($dayLocations as $loc) {
-                    // Convertir cada punto a hora local para cálculos correctos
-                    $currentTimestamp = Carbon::parse($loc->timestamp)->setTimezone($timezone);
-                    
-                    if ($lastLoc) {
-                        $lastTimestamp = Carbon::parse($lastLoc->timestamp)->setTimezone($timezone);
-                        $secondsDiff = $currentTimestamp->diffInSeconds($lastTimestamp);
-
-                        // SI HAY UNA PAUSA MAYOR A 5 MINUTOS (300s) -> CORTAR RUTA
-                        if ($secondsDiff > 300) {
-                            if (count($currentRoute) > 1) {
-                                $routes[] = $this->calculateRouteSummary($currentRoute);
-                            }
-                            $currentRoute = [];
-                        }
-                    }
-                    $currentRoute[] = $loc;
-                    $lastLoc = $loc;
-                }
-                // Guardar la última del día
-                if (count($currentRoute) > 1) {
-                    $routes[] = $this->calculateRouteSummary($currentRoute);
-                }
-
-                // Sumar totales del día
-                $dayDist = collect($routes)->sum('distance_km');
-                $dayFuel = collect($routes)->sum('fuel');
-                $dayMove = collect($routes)->sum('duration_seconds');
-
-                $dailyActivity[] = [
-                    'date' => $date, // YYYY-MM-DD
-                    'day_name' => Carbon::parse($date)->locale('es')->isoFormat('dddd D'), // "Viernes 16"
-                    'summary' => [
-                        'total_distance_km' => round($dayDist, 2),
-                        'total_routes' => count($routes),
-                        'total_duration' => $this->secondsToHumanN($dayMove),
-                        'estimated_fuel' => round($dayFuel, 2)
-                    ],
-                    'routes' => $routes // Lista detallada igual que tu otra pantalla
-                ];
-            }
-
-            // Totales Globales
-            $totalStats = [
-                'total_distance_km' => round(collect($dailyActivity)->sum('summary.total_distance_km'), 2),
-                'total_routes' => collect($dailyActivity)->sum('summary.total_routes'),
-                'total_fuel' => round(collect($dailyActivity)->sum('summary.estimated_fuel'), 1),
-            ];
-
+        if ($locations->isEmpty()) {
             return response()->json([
                 'success' => true,
-                'period_summary' => $totalStats,
-                'daily_activity' => $dailyActivity
+                'summary' => null,
+                'days' => []
             ]);
-
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+
+        // AGRUPAR POR DÍA (hora local)
+        $grouped = $locations->groupBy(
+            fn($l) =>
+            Carbon::parse($l->timestamp)->setTimezone($timezone)->format('Y-m-d')
+        );
+
+        $days = [];
+        $totalDistance = 0;
+        $totalRoutes = 0;
+        $totalDuration = 0;
+
+        foreach ($grouped as $date => $points) {
+
+            $routes = [];
+            $current = [];
+            $last = null;
+
+            foreach ($points as $p) {
+                if ($last) {
+                    $diff = Carbon::parse($p->timestamp)->diffInSeconds($last->timestamp);
+                    if ($diff > 300) {
+                        if (count($current) > 1) {
+                            $routes[] = $this->buildRoute($current, $timezone);
+                        }
+                        $current = [];
+                    }
+                }
+                $current[] = $p;
+                $last = $p;
+            }
+
+            if (count($current) > 1) {
+                $routes[] = $this->buildRoute($current, $timezone);
+            }
+
+            $dayDistance = collect($routes)->sum('distance_km');
+            $dayDuration = collect($routes)->sum('duration_seconds');
+
+            $days[] = [
+                'date' => $date,
+                'label' => Carbon::parse($date)->locale('es')->isoFormat('dddd D'),
+                'distance_km' => round($dayDistance, 2),
+                'routes_count' => count($routes),
+                'routes' => $routes
+            ];
+
+            $totalDistance += $dayDistance;
+            $totalRoutes += count($routes);
+            $totalDuration += $dayDuration;
+        }
+
+        return response()->json([
+            'success' => true,
+            'summary' => [
+                'total_distance_km' => round($totalDistance, 2),
+                'total_routes' => $totalRoutes,
+                'active_days' => count($days),
+                'total_duration_seconds' => $totalDuration
+            ],
+            'days' => $days
+        ]);
     }
 
-    // Helper para procesar una ruta individual
-    private function calculateRouteSummary($points) {
-        $dist = 0;
+    private function buildRoute($points, $timezone)
+    {
+        $distance = 0;
         $prev = null;
-        $maxSpeed = 0;
-        // OJO: Usamos hora de México para mostrar
-        $tz = 'America/Mexico_City';
-        $start = Carbon::parse($points[0]->timestamp)->setTimezone($tz);
-        $end = Carbon::parse(end($points)->timestamp)->setTimezone($tz);
 
         foreach ($points as $p) {
             if ($prev) {
-                $d = $this->calculateHaversineDistanceN($prev->latitude, $prev->longitude, $p->latitude, $p->longitude);
-                // Filtro anti-ruido
-                if ($d > 0.005 && $d < 5.0) $dist += $d;
+                $d = $this->haversine(
+                    $prev->latitude,
+                    $prev->longitude,
+                    $p->latitude,
+                    $p->longitude
+                );
+                if ($d > 0.005 && $d < 5) {
+                    $distance += $d;
+                }
             }
-            if ($p->speed > $maxSpeed) $maxSpeed = $p->speed;
             $prev = $p;
         }
 
+        $start = Carbon::parse($points[0]->timestamp)->setTimezone($timezone);
+        $end = Carbon::parse(end($points)->timestamp)->setTimezone($timezone);
+
         return [
-            'start_time' => $start->format('h:i A'), // 01:12 PM
+            'start_time' => $start->format('h:i A'),
             'end_time' => $end->format('h:i A'),
-            'duration_human' => $start->diffForHumans($end, true, true), // "15m"
+            'distance_km' => round($distance, 2),
             'duration_seconds' => $end->diffInSeconds($start),
-            'distance_km' => round($dist, 2),
-            'max_speed' => round($maxSpeed, 0),
-            'fuel' => $dist > 0 ? round($dist / 10, 2) : 0,
-            'points_count' => count($points)
         ];
     }
 
-    // (Mantén tus funciones calculateHaversineDistance y secondsToHuman aquí)
-    private function calculateHaversineDistanceN($lat1, $lon1, $lat2, $lon2) {
-        $earthRadius = 6371; 
+    private function haversine($lat1, $lon1, $lat2, $lon2)
+    {
+        $r = 6371;
         $dLat = deg2rad($lat2 - $lat1);
         $dLon = deg2rad($lon2 - $lon1);
-        $a = sin($dLat/2) * sin($dLat/2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon/2) * sin($dLon/2);
-        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
-        return $earthRadius * $c;
+        $a = sin($dLat / 2) ** 2 +
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($dLon / 2) ** 2;
+        return $r * (2 * atan2(sqrt($a), sqrt(1 - $a)));
     }
-    
-    private function secondsToHumanN($seconds) {
-        $h = floor($seconds / 3600);
-        $m = floor(($seconds % 3600) / 60);
-        return "{$h}h {$m}m";
-    }
- 
-   
 }
