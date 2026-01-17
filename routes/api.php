@@ -186,7 +186,7 @@ Route::middleware('auth:customer')->group(function () {
     Route::get('devices/{deviceId}/reports/alarms', [RouteController::class, 'getAlarmsReport']);
     Route::get('devices/{deviceId}/reports/daily-activity', [RouteController::class, 'getDailyActivityReport']);
     Route::get('devices/{deviceId}/export-activity', [RouteController::class, 'exportActivityReport']);
-    Route::get('devices/{deviceId}/export-alarms', [DeviceController::class, 'exportAlarmsReport']);
+    Route::get('devices/{deviceId}/export-alarms', [RouteController::class, 'exportAlarmsReport']);
 
     // 4. Exportar ruta
     // POST: /api/devices/{deviceId}/route/export
