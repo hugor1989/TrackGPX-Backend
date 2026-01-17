@@ -837,6 +837,70 @@ class RouteController extends Controller
         return $kml;
     }
 
+
+    public function getActivityByDay(Request $request, $deviceId)
+    {
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'max_interval_minutes' => 'nullable|integer|min:1|max:1440',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 400);
+        }
+
+        $device = Device::findOrFail($deviceId);
+
+        $locations = Location::where('device_id', $device->id)
+            ->whereBetween('timestamp', [
+                Carbon::parse($request->start_date)->startOfDay(),
+                Carbon::parse($request->end_date)->endOfDay(),
+            ])
+            ->orderBy('timestamp', 'ASC')
+            ->get();
+
+        if ($locations->isEmpty()) {
+            return response()->json([
+                'success' => true,
+                'days' => [],
+            ]);
+        }
+
+        // 🔥 USAR TU LÓGICA EXISTENTE
+        $routes = $this->detectMultipleRoutes(
+            $locations,
+            $request->max_interval_minutes ?? 5,
+            $device
+        );
+
+        // 🔥 AGRUPAR RUTAS POR DÍA
+        $days = collect($routes)->groupBy(function ($route) {
+            return Carbon::parse($route['start_time'])->toDateString();
+        })->map(function ($routes, $date) {
+            return [
+                'date' => $date,
+                'label' => Carbon::parse($date)->translatedFormat('l d'),
+                'routes_count' => count($routes),
+                'total_distance_km' => round(
+                    collect($routes)->sum(fn($r) => $r['statistics']['distance']),
+                    2
+                ),
+                'start_time' => min(array_column($routes->toArray(), 'start_time')),
+                'end_time' => max(array_column($routes->toArray(), 'end_time')),
+            ];
+        })->values();
+
+        return response()->json([
+            'success' => true,
+            'days' => $days,
+        ]);
+    }
+
+
     /**
      * 🔔 Reporte de Historial de Alarmas
      */
