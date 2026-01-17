@@ -916,7 +916,213 @@ class RouteController extends Controller
         ]);
     }
 
+    /**
+     * Exportar Reporte de Actividad a CSV (Excel)
+     */
+    public function exportActivityReport(Request $request, $deviceId)
+    {
+        // Reutilizamos la validación
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
 
+        if ($validator->fails()) return response()->json(['success' => false], 400);
+
+        $device = Device::findOrFail($deviceId);
+        $timezone = 'America/Mexico_City';
+
+        // Nombres de archivo amigables
+        $fileName = "Reporte_Actividad_{$device->name}_" . date('Y-m-d_His') . ".csv";
+
+        // Headers para forzar descarga
+        $headers = [
+            "Content-type"        => "text/csv",
+            "Content-Disposition" => "attachment; filename=$fileName",
+            "Pragma"              => "no-cache",
+            "Cache-Control"       => "must-revalidate, post-check=0, pre-check=0",
+            "Expires"             => "0"
+        ];
+
+        // Usamos StreamedResponse para no saturar la memoria del servidor
+        $callback = function () use ($device, $request, $timezone) {
+            $file = fopen('php://output', 'w');
+
+            // BOM para que Excel reconozca acentos latinos (Ñ, á, é...)
+            fputs($file, "\xEF\xBB\xBF");
+
+            // 1. ENCABEZADOS DEL CSV
+            fputcsv($file, ['REPORTE DE ACTIVIDAD DETALLADO']);
+            fputcsv($file, ['Dispositivo:', $device->name]);
+            fputcsv($file, ['IMEI:', $device->imei]);
+            fputcsv($file, ['Desde:', $request->start_date]);
+            fputcsv($file, ['Hasta:', $request->end_date]);
+            fputcsv($file, []); // Espacio vacío
+
+            // 2. CABECERAS DE COLUMNAS
+            fputcsv($file, [
+                'Fecha',
+                'Día',
+                'Total Rutas',
+                'Distancia (km)',
+                'Tiempo Activo',
+                'Combustible Est. (L)',
+                'Vel. Máxima (km/h)',
+                'Hora Inicio',
+                'Hora Fin'
+            ]);
+
+            // 3. OBTENER DATOS (Copiado de tu lógica de getDailyActivityReport)
+            // (Simplificado aquí para el ejemplo, deberías extraer la lógica común a un Service)
+            $localStart = Carbon::parse($request->start_date, $timezone)->startOfDay();
+            $localEnd = Carbon::parse($request->end_date, $timezone)->endOfDay();
+            $utcStart = $localStart->copy()->setTimezone('UTC');
+            $utcEnd = $localEnd->copy()->setTimezone('UTC');
+
+            $locations = Location::select(['latitude', 'longitude', 'speed', 'timestamp'])
+                ->where('device_id', $device->id)
+                ->whereBetween('timestamp', [$utcStart, $utcEnd])
+                ->where('latitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC')
+                ->cursor(); // Usamos cursor para iterar millones de filas sin crashear
+
+            // Agrupar en memoria (optimizado)
+            $dailyGroups = [];
+            foreach ($locations as $loc) {
+                $day = Carbon::parse($loc->timestamp)->setTimezone($timezone)->format('Y-m-d');
+                $dailyGroups[$day][] = $loc;
+            }
+
+            // Procesar y escribir línea por línea
+            $current = $localStart->copy();
+            while ($current->lte($localEnd)) {
+                $dateStr = $current->format('Y-m-d');
+
+                if (isset($dailyGroups[$dateStr])) {
+                    // Calculamos estadísticas del día (Tu función calculateDayStats)
+                    $stats = $this->calculateDayStats(collect($dailyGroups[$dateStr]), $timezone);
+
+                    if ($stats['routes_count'] > 0) {
+                        fputcsv($file, [
+                            $dateStr,
+                            ucfirst($current->locale('es')->isoFormat('dddd')),
+                            $stats['routes_count'],
+                            $stats['distance_km'],
+                            $stats['duration_human'] ?? '--', // Asegúrate de retornar esto en calculateDayStats
+                            $stats['fuel'],
+                            $stats['max_speed'] ?? 0,
+                            $stats['start_time'] ?? '--',
+                            $stats['end_time'] ?? '--',
+                        ]);
+                    }
+                }
+                $current->addDay();
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * Helper para calcular estadísticas de un día (Usado por JSON y Exportación)
+     */
+    private function calculateDayStats($locations, $timezone)
+    {
+        if ($locations->isEmpty()) {
+            return [
+                'distance_km' => 0,
+                'fuel' => 0,
+                'routes_count' => 0,
+                'duration_human' => '0h 0m',
+                'start_time' => '--',
+                'end_time' => '--',
+                'max_speed' => 0
+            ];
+        }
+
+        $distance = 0;
+        $routesCount = 0;
+        $prev = null;
+        $lastTime = null;
+        $inRoute = false;
+        $maxSpeed = 0;
+
+        // Tiempos
+        $firstTime = null;
+        $lastRouteTime = null;
+        $totalSeconds = 0;
+
+        foreach ($locations as $loc) {
+            $currTime = \Carbon\Carbon::parse($loc->timestamp)->setTimezone($timezone);
+
+            if ($prev) {
+                // Distancia
+                $d = $this->calculateHaversineDistance(
+                    $prev->latitude,
+                    $prev->longitude,
+                    $loc->latitude,
+                    $loc->longitude
+                );
+
+                // Filtro de ruido (Drift)
+                if ($d > 0.005 && $d < 2.0) {
+                    $distance += $d;
+                }
+
+                // Velocidad Máxima
+                if ($loc->speed > $maxSpeed) {
+                    $maxSpeed = $loc->speed;
+                }
+
+                // Detección de Rutas (Corte 5 min)
+                $diff = $currTime->diffInSeconds($lastTime);
+
+                if ($diff > 300) {
+                    if ($inRoute) {
+                        $routesCount++;
+                        // Sumar duración de la ruta anterior
+                        if ($firstTime && $lastRouteTime) {
+                            $totalSeconds += $lastRouteTime->diffInSeconds($firstTime);
+                        }
+                    }
+                    $inRoute = false;
+                    $firstTime = null; // Reiniciar inicio de ruta
+                } else {
+                    if (!$inRoute) {
+                        $inRoute = true;
+                        $firstTime = $lastTime; // El inicio fue el punto anterior
+                    }
+                    $lastRouteTime = $currTime;
+                }
+            }
+            $prev = $loc;
+            $lastTime = $currTime;
+        }
+
+        // Contar la última ruta pendiente
+        if ($inRoute) {
+            $routesCount++;
+            if ($firstTime && $lastRouteTime) {
+                $totalSeconds += $lastRouteTime->diffInSeconds($firstTime);
+            }
+        }
+
+        // Horas de inicio y fin del día (Primer y último punto registrado)
+        $dayStart = \Carbon\Carbon::parse($locations->first()->timestamp)->setTimezone($timezone)->format('H:i');
+        $dayEnd = \Carbon\Carbon::parse($locations->last()->timestamp)->setTimezone($timezone)->format('H:i');
+
+        return [
+            'distance_km' => round($distance, 2),
+            'fuel' => round($distance / 10, 1), // Rendimiento estimado
+            'routes_count' => $routesCount,
+            'duration_human' => $this->secondsToHuman($totalSeconds),
+            'start_time' => $dayStart,
+            'end_time' => $dayEnd,
+            'max_speed' => round($maxSpeed, 0)
+        ];
+    }
 
     /**
      * 🔔 Reporte de Historial de Alarmas
