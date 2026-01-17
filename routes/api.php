@@ -180,6 +180,8 @@ Route::middleware('auth:customer')->group(function () {
     // GET: /api/devices/{deviceId}/route?start_date=...&end_date=...
     Route::post('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
 
+     Route::get('devices/{device}/activity',[RouteController::class, 'getActivityByDay']);
+
     //Reportes
     Route::get('devices/{deviceId}/reports/alarms', [RouteController::class, 'getAlarmsReport']);
     Route::get('devices/{deviceId}/reports/daily-activity', [RouteController::class, 'getDailyActivityReport']);
