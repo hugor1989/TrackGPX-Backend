@@ -1229,6 +1229,96 @@ class RouteController extends Controller
         }
     }
 
+    /**
+     * 📥 Exportar Reporte de Alarmas a CSV
+     */
+    public function exportAlarmsReport(Request $request, $deviceId)
+    {
+        // 1. Validaciones
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'alarm_type' => 'nullable|string', // Ojo: el nombre del param debe coincidir
+        ]);
+
+        if ($validator->fails()) return response()->json(['success' => false], 400);
+
+        try {
+            $device = Device::findOrFail($deviceId);
+            $timezone = 'America/Mexico_City';
+
+            // Configurar fechas
+            $startDate = Carbon::parse($request->start_date)->startOfDay();
+            $endDate = Carbon::parse($request->end_date)->endOfDay();
+
+            // 2. Preparar el archivo en memoria (StreamedResponse)
+            $fileName = "Alarmas_{$device->name}_" . date('Y-m-d_His') . ".csv";
+            
+            $headers = [
+                "Content-type"        => "text/csv",
+                "Content-Disposition" => "attachment; filename=$fileName",
+                "Pragma"              => "no-cache",
+                "Cache-Control"       => "must-revalidate, post-check=0, pre-check=0",
+                "Expires"             => "0"
+            ];
+
+            $callback = function() use ($device, $startDate, $endDate, $request, $timezone) {
+                $file = fopen('php://output', 'w');
+                fputs($file, "\xEF\xBB\xBF"); // BOM para acentos
+
+                // Encabezados del CSV
+                fputcsv($file, ['REPORTE DE ALARMAS']);
+                fputcsv($file, ['Dispositivo:', $device->name]);
+                fputcsv($file, ['Desde:', $request->start_date]);
+                fputcsv($file, ['Hasta:', $request->end_date]);
+                fputcsv($file, []); // Espacio
+                fputcsv($file, ['Fecha', 'Hora', 'Tipo', 'Mensaje', 'Velocidad (km/h)', 'Latitud', 'Longitud', 'Google Maps']);
+
+                // 3. Consulta (Idéntica a tu getAlarmsReport)
+                $query = DB::table('notifications')
+                    ->where('data->device_id', $device->id)
+                    ->whereBetween('created_at', [$startDate, $endDate])
+                    ->orderBy('created_at', 'DESC');
+
+                // Aplicar filtro de tipo si existe
+                if ($request->alarm_type && $request->alarm_type !== 'all') {
+                    $query->where('type', $request->alarm_type);
+                }
+
+                // Usamos chunk para procesar grandes cantidades sin llenar la RAM
+                $query->chunk(500, function($notifications) use ($file, $timezone) {
+                    foreach ($notifications as $notif) {
+                        // Decodificar el JSON 'data' para obtener detalles extra
+                        $extraData = is_string($notif->data) ? json_decode($notif->data, true) : $notif->data;
+                        
+                        $date = Carbon::parse($notif->created_at)->setTimezone($timezone);
+                        $lat = $extraData['latitude'] ?? 0;
+                        $lon = $extraData['longitude'] ?? 0;
+                        $mapsLink = ($lat && $lon) ? "https://maps.google.com/?q={$lat},{$lon}" : '';
+
+                        fputcsv($file, [
+                            $date->format('Y-m-d'),
+                            $date->format('H:i:s'),
+                            $notif->type,
+                            $notif->message, // O $notif->title
+                            $extraData['speed'] ?? 0,
+                            $lat,
+                            $lon,
+                            $mapsLink
+                        ]);
+                    }
+                });
+
+                fclose($file);
+            };
+
+            return response()->stream($callback, 200, $headers);
+
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
     public function getDailyActivityReport(Request $request, $deviceId)
     {
         $request->validate([
