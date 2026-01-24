@@ -98,8 +98,16 @@ class RouteController extends Controller
             // Consulta base - ✅ ORDENAR POR TIMESTAMP
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
+                
+                // 1. FILTRO ANTI-GHOST (Ya lo tenías, bien hecho)
                 ->where('latitude', '!=', 0)
                 ->where('longitude', '!=', 0)
+
+                // 2. 🔥 FILTRO SOLO MÉXICO (AGREGA ESTO)
+                // Esto ocultará cualquier punto que haya caído en África, China o el océano
+                ->whereBetween('latitude', [14.0, 33.5])
+                ->whereBetween('longitude', [-120.0, -86.0])
+
                 ->orderBy('timestamp', 'ASC'); // 🔥 CRÍTICO: Ordenar aquí
 
             // Aplicar filtros
