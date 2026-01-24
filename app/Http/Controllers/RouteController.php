@@ -847,6 +847,7 @@ class RouteController extends Controller
 
     public function getActivityByDay(Request $request, $deviceId)
     {
+        // 1. VALIDACIÓN
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
@@ -862,30 +863,50 @@ class RouteController extends Controller
 
         $device = Device::findOrFail($deviceId);
 
+        // 2. CONSULTA BLINDADA (Filtro SQL)
+        // Solo traemos puntos que NO sean basura (0,0)
         $locations = Location::where('device_id', $device->id)
             ->whereBetween('timestamp', [
                 Carbon::parse($request->start_date)->startOfDay(),
                 Carbon::parse($request->end_date)->endOfDay(),
             ])
+            // 🔥 FILTRO 1: Ignorar coordenadas 0,0 (Evita viajes a África)
+            ->where(function ($q) {
+                $q->where('latitude', '!=', 0)
+                  ->where('longitude', '!=', 0);
+            })
             ->orderBy('timestamp', 'ASC')
             ->get();
 
         if ($locations->isEmpty()) {
             return response()->json([
                 'success' => true,
-                'summary' => null,
+                'summary' => null, // O devolver ceros si prefieres
                 'days' => [],
             ]);
         }
 
-        // 🔥 TU LÓGICA REAL (NO SE TOCA)
+        // 3. SANITIZACIÓN EN MEMORIA (Corrección de China -> México)
+        // Antes de procesar las rutas, corregimos los signos invertidos si existen.
+        $cleanLocations = $locations->map(function ($loc) {
+            $lon = (float)$loc->longitude;
+            
+            // Si la longitud es positiva (ej. 103.28), la hacemos negativa (-103.28)
+            // Esto arregla el cálculo de distancia sin tener que editar la BD ahorita.
+            if ($lon > 80 && $lon < 180) {
+                $loc->longitude = $lon * -1;
+            }
+            return $loc;
+        });
+
+        // 4. TU LÓGICA DE DETECCIÓN (Usando los datos ya limpios)
         $routes = $this->detectMultipleRoutes(
-            $locations,
+            $cleanLocations, // Pasamos las locations corregidas
             $request->max_interval_minutes ?? 5,
             $device
         );
 
-        // 🔥 AGRUPAR RUTAS POR DÍA
+        // 5. AGRUPAR Y CALCULAR ESTADÍSTICAS
         $days = collect($routes)->groupBy(function ($route) {
             return Carbon::parse($route['start_time'])->toDateString();
         })->map(function ($routes, $date) {
@@ -895,21 +916,22 @@ class RouteController extends Controller
                     ->diffInMinutes(Carbon::parse($r['end_time']));
             });
 
+            // Suma de distancias (Ahora será precisa porque usamos coordenadas corregidas)
+            $totalDistance = collect($routes)->sum(fn($r) => $r['statistics']['distance']);
+
             return [
                 'date' => $date,
-                'label' => Carbon::parse($date)
-                    ->locale('es')
-                    ->translatedFormat('l d F'),
+                'label' => Carbon::parse($date)->locale('es')->translatedFormat('l d F'),
                 'routes_count' => count($routes),
-                'distance_km' => round(
-                    collect($routes)->sum(fn($r) => $r['statistics']['distance']),
-                    2
-                ),
+                'distance_km' => round($totalDistance, 2),
                 'start_time' => min(array_column($routes->toArray(), 'start_time')),
                 'end_time' => max(array_column($routes->toArray(), 'end_time')),
                 'active_minutes' => $activeMinutes,
             ];
         })->values();
+
+        // Ordenar los días del más reciente al más antiguo (Opcional, para la gráfica se ve mejor al revés en el frontend)
+        // $days = $days->sortByDesc('date')->values(); 
 
         return response()->json([
             'success' => true,
