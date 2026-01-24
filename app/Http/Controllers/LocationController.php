@@ -38,13 +38,45 @@ class LocationController extends Controller
                 'vibration_detected' => 'nullable|boolean',
             ]);
 
-            Log::info('📍 Datos recibidos del GPS', [
+            // Variables para facilitar la lectura
+            $lat = (float) $validated['latitude'];
+            $lon = (float) $validated['longitude'];
+
+            // =================================================================
+            // 🛡️ ZONA DE SEGURIDAD: FILTROS DE CALIDAD DE DATOS
+            // =================================================================
+
+            // FILTRO 1: Anti-Ghost (Coordenadas 0,0)
+            // Muchos GPS envían esto al encenderse o perder señal.
+            if ($lat == 0 || $lon == 0) {
+                Log::warning('👻 Ghost Point (0,0) descartado.', ['imei' => $validated['imei']]);
+                
+                // IMPORTANTE: Retornamos 200 OK para que el dispositivo
+                // crea que se guardó y deje de enviar este paquete basura.
+                return response()->json(['success' => true, 'message' => 'Ghost point ignored'], 200);
+            }
+
+            // FILTRO 2: Geo-Fence Nacional (Solo México)
+            // Aproximado: Latitud 14 a 33.5, Longitud -120 a -86
+            $isInsideMexico = ($lat >= 14.0 && $lat <= 33.5) && ($lon >= -120.0 && $lon <= -86.0);
+
+            if (!$isInsideMexico) {
+                Log::warning('🌍 Coordenada extranjera descartada.', [
+                    'imei' => $validated['imei'],
+                    'lat' => $lat, 
+                    'lon' => $lon
+                ]);
+                return response()->json(['success' => true, 'message' => 'Foreign location ignored'], 200);
+            }
+
+            // =================================================================
+
+            Log::info('📍 Datos válidos recibidos', [
                 'imei' => $validated['imei'],
                 'speed' => $validated['speed'] ?? 'null',
             ]);
 
             // 2. Buscar dispositivo CARGANDO LA RELACIÓN 'members'
-            // Asegúrate de haber agregado la función members() en tu modelo Device
             $device = Device::where('imei', $validated['imei'])
                 ->with(['customer', 'vehicle', 'alarms', 'members'])
                 ->first();
@@ -63,7 +95,7 @@ class LocationController extends Controller
                 ? Carbon::parse($validated['timestamp'])->setTimezone('America/Mexico_City')
                 : Carbon::now('America/Mexico_City');
 
-            // 3. Crear la nueva ubicación en la BD
+            // 3. Crear la nueva ubicación en la BD (Solo datos limpios llegan aquí)
             $location = Location::create([
                 'device_id' => $device->id,
                 'latitude' => $validated['latitude'],
@@ -75,17 +107,14 @@ class LocationController extends Controller
             ]);
 
             // 4. Actualizar estado del Dispositivo (Cache visual)
-            if ($validated['latitude'] != 0 && $validated['longitude'] != 0) {
-                $device->update([
-                    'last_connection' => now(),
-                    'last_latitude'   => $validated['latitude'],
-                    'last_longitude'  => $validated['longitude'],
-                    'last_speed'      => $validated['speed'] ?? 0,
-                    'last_heading'    => $validated['heading'] ?? 0,
-                ]);
-            } else {
-                $device->update(['last_connection' => now()]);
-            }
+            // Ya sabemos que lat/lon no son 0, así que actualizamos siempre
+            $device->update([
+                'last_connection' => now(),
+                'last_latitude'   => $validated['latitude'],
+                'last_longitude'  => $validated['longitude'],
+                'last_speed'      => $validated['speed'] ?? 0,
+                'last_heading'    => $validated['heading'] ?? 0,
+            ]);
 
             Log::info('✅ Ubicación guardada', ['location_id' => $location->id]);
 
@@ -98,20 +127,18 @@ class LocationController extends Controller
             ];
 
             // ============================================
-            // 5. LÓGICA DE ALERTAS MULTI-USUARIO (ADMIN + MEMBERS)
+            // 5. LÓGICA DE ALERTAS MULTI-USUARIO
             // ============================================
 
             $alarms = $device->alarms;
-
-            // --- A. Recolectar Destinatarios ---
             $recipients = collect();
 
-            // 1. Agregar Admin (Dueño) si tiene token
+            // 1. Agregar Admin
             if ($device->customer && !empty($device->customer->expo_push_token)) {
                 $recipients->push($device->customer);
             }
 
-            // 2. Agregar Members (Invitados) si tienen token
+            // 2. Agregar Members
             if ($device->members) {
                 foreach ($device->members as $member) {
                     if (!empty($member->expo_push_token)) {
@@ -120,26 +147,15 @@ class LocationController extends Controller
                 }
             }
 
-            // 3. Eliminar duplicados (por ID)
             $recipients = $recipients->unique('id');
 
-            Log::info('🔍 Verificando alertas', [
-                'device_id' => $device->id,
-                'recipients_count' => $recipients->count(),
-                'recipient_ids' => $recipients->pluck('id')->toArray()
-            ]);
-
-            // --- B. Evaluar Alertas solo si hay configuración y destinatarios ---
+            // Evaluar Alertas
             if ($alarms && $recipients->count() > 0) {
 
-                // ALERTA DE VELOCIDAD
+                // VELOCIDAD
                 if ($alarms->alarm_speed && $alarms->speed_limit && isset($validated['speed'])) {
                     if ($validated['speed'] > $alarms->speed_limit) {
                         if ($this->shouldSendSpeedAlert($device)) {
-
-                            Log::info('🚨 Alerta de Velocidad -> Enviando a ' . $recipients->count() . ' usuarios');
-
-                            // Pasamos $recipients al evento
                             SpeedAlertTriggered::dispatch(
                                 $device,
                                 (float) $validated['speed'],
@@ -147,7 +163,6 @@ class LocationController extends Controller
                                 $locationData,
                                 $recipients
                             );
-
                             $this->markSpeedAlertSent($device);
                         }
                     } else {
@@ -155,26 +170,22 @@ class LocationController extends Controller
                     }
                 }
 
-                // ALERTA DE BATERÍA BAJA
+                // BATERÍA BAJA
                 if ($alarms->alarm_low_battery && isset($validated['battery_level'])) {
                     if ($validated['battery_level'] <= 20) {
                         if ($this->shouldSendBatteryAlert($device, $validated['battery_level'])) {
-
-                            Log::info('🔋 Alerta Batería -> Enviando a ' . $recipients->count() . ' usuarios');
-
                             LowBatteryAlert::dispatch(
                                 $device,
                                 (int) $validated['battery_level'],
                                 $locationData,
                                 $recipients
                             );
-
                             $this->markBatteryAlertSent($device, $validated['battery_level']);
                         }
                     }
                 }
 
-                // ALERTA DE REMOCIÓN
+                // REMOCIÓN
                 if ($alarms->alarm_removal && ($validated['removal_detected'] ?? false)) {
                     if ($this->shouldSendRemovalAlert($device)) {
                         DeviceRemovalAlert::dispatch($device, $locationData, $recipients);
@@ -182,23 +193,17 @@ class LocationController extends Controller
                     }
                 }
 
-                // ALERTA DE VIBRACIÓN
+                // VIBRACIÓN
                 if ($alarms->alarm_vibration && ($validated['vibration_detected'] ?? false)) {
                     if ($this->shouldSendVibrationAlert($device)) {
-                        // Asegúrate de crear este evento si no existe o usar uno genérico
-                        //DeviceVibrationAlert::dispatch($device, $locationData, $recipients);
+                        // DeviceVibrationAlert::dispatch($device, $locationData, $recipients);
                     }
                 }
 
-                // ALERTA DE GEOCERCA (Si la manejas aquí)
+                // GEOCERCA
                 if ($alarms->alarm_geofence) {
-                    // Deberás actualizar checkGeofenceAlert para que acepte $recipients
                     $this->checkGeofenceAlert($device, $validated['latitude'], $validated['longitude'], $locationData, $recipients);
                 }
-            } else {
-                // Logs de diagnóstico si no se envían alertas
-                if (!$alarms) Log::warning('⚠️ Sin configuración de alarmas');
-                elseif ($recipients->isEmpty()) Log::warning('⚠️ Alerta detectada pero SIN destinatarios con token (Admin o Members)');
             }
 
             return response()->json([
@@ -209,6 +214,7 @@ class LocationController extends Controller
                     'recipients_notified' => $recipients->count()
                 ]
             ], 201);
+
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json(['success' => false, 'message' => 'Error de validación', 'errors' => $e->errors()], 422);
         } catch (\Exception $e) {
