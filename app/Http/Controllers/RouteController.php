@@ -1086,7 +1086,7 @@ class RouteController extends Controller
         }
 
         // 5. GENERAR PDF
-        $pdf = Pdf::loadView('reports.activity_pdf_pro', [
+        $pdf = Pdf::loadView('reports.activity_pdf', [
             'device' => $device,
             'client_name' => 'Transportes Logísticos S.A.', // Puedes sacarlo de $device->user->name
             'range' => $request->start_date . ' al ' . $request->end_date,
