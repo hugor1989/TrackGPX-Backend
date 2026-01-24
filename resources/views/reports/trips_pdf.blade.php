@@ -4,56 +4,70 @@
     <meta charset="UTF-8">
     <title>Reporte de Viajes</title>
     <style>
-        @page { margin: 20px; }
-        body { font-family: sans-serif; font-size: 11px; color: #333; }
+        @page { margin: 30px; }
+        body { font-family: 'Helvetica', sans-serif; font-size: 11px; color: #1e293b; }
         
-        .header { background-color: #1e293b; color: white; padding: 20px; border-radius: 6px; }
-        .logo { height: 40px; float: right; }
-        h1 { margin: 0; font-size: 18px; text-transform: uppercase; }
-        
-        /* KPI SECTION */
-        .kpi-row { display: table; width: 100%; margin: 15px 0; background: #f1f5f9; padding: 10px; border-radius: 6px; }
-        .kpi-cell { display: table-cell; text-align: center; border-right: 1px solid #cbd5e1; }
-        .kpi-cell:last-child { border-right: none; }
-        .kpi-val { font-size: 16px; font-weight: bold; color: #0f172a; display: block; }
-        .kpi-lbl { font-size: 9px; color: #64748b; text-transform: uppercase; }
+        /* HEADER */
+        .header { margin-bottom: 20px; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+        .logo { max-height: 80px; float: right; margin-top: -10px; } /* 🔥 LOGO MÁS GRANDE */
+        h1 { margin: 0; font-size: 24px; text-transform: uppercase; color: #0f172a; }
+        .sub { font-size: 12px; color: #64748b; margin-top: 5px; }
 
-        /* DATA TABLE */
+        /* KPI SUMMARY */
+        .kpi-row { display: table; width: 100%; margin-bottom: 20px; background-color: #f1f5f9; border-radius: 8px; padding: 15px 0; }
+        .kpi-box { display: table-cell; text-align: center; width: 25%; border-right: 1px solid #cbd5e1; }
+        .kpi-box:last-child { border-right: none; }
+        .kpi-val { font-size: 18px; font-weight: 800; color: #0f172a; display: block; }
+        .kpi-lbl { font-size: 10px; text-transform: uppercase; color: #64748b; margin-top: 4px; letter-spacing: 1px; }
+
+        /* TABLE */
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { background-color: #0f172a; color: white; padding: 8px; text-align: left; font-size: 9px; text-transform: uppercase; }
-        td { padding: 8px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
+        th { background-color: #0f172a; color: white; padding: 10px; text-align: left; font-size: 10px; text-transform: uppercase; }
+        td { padding: 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
         tr:nth-child(even) { background-color: #f8fafc; }
+
+        /* ICONS & BADGES */
+        .dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .dot-green { background-color: #10b981; }
+        .dot-red { background-color: #ef4444; }
         
-        .map-link { color: #3b82f6; text-decoration: none; font-size: 9px; background: #eff6ff; padding: 2px 5px; border-radius: 3px; border: 1px solid #bfdbfe; }
-        .cost { color: #059669; font-weight: bold; }
+        .btn-map { 
+            display: inline-block; background-color: #eff6ff; color: #3b82f6; 
+            padding: 4px 8px; border-radius: 4px; text-decoration: none; 
+            font-size: 9px; border: 1px solid #bfdbfe; font-weight: bold;
+        }
+        
+        .coord { font-size: 9px; color: #94a3b8; display: block; margin-top: 2px; font-family: monospace; }
+        .cost-badge { color: #059669; font-weight: bold; background: #ecfdf5; padding: 2px 6px; border-radius: 4px; }
     </style>
 </head>
 <body>
 
     <div class="header">
         @if($logo) <img src="{{ $logo }}" class="logo"> @endif
-        <h1>Reporte Detallado de Viajes</h1>
-        <div style="font-size: 10px; opacity: 0.8; margin-top: 4px;">
-            {{ $device->name }} | {{ $range }}
+        <h1>Reporte de Viajes</h1>
+        <div class="sub">
+            Dispositivo: <strong>{{ $device->name }}</strong> (IMEI: {{ $device->imei }})<br>
+            Rango: {{ $range }}
         </div>
     </div>
 
     <div class="kpi-row">
-        <div class="kpi-cell">
+        <div class="kpi-box">
             <span class="kpi-val">{{ $summary['total_trips'] }}</span>
             <span class="kpi-lbl">Viajes Totales</span>
         </div>
-        <div class="kpi-cell">
+        <div class="kpi-box">
             <span class="kpi-val">{{ number_format($summary['total_km'], 2) }} km</span>
             <span class="kpi-lbl">Distancia Total</span>
         </div>
-        <div class="kpi-cell">
+        <div class="kpi-box">
             <span class="kpi-val">{{ gmdate("H\h i\m", $summary['total_time']) }}</span>
             <span class="kpi-lbl">Tiempo Conducción</span>
         </div>
-        <div class="kpi-cell">
-            <span class="kpi-val" style="color:#ef4444">{{ $summary['max_speed'] }} km/h</span>
-            <span class="kpi-lbl">Vel. Máxima Reg.</span>
+        <div class="kpi-box">
+            <span class="kpi-val" style="color: #ef4444">{{ $summary['max_speed'] }} km/h</span>
+            <span class="kpi-lbl">Vel. Máxima</span>
         </div>
     </div>
 
@@ -62,11 +76,12 @@
             <tr>
                 <th width="10%">Fecha</th>
                 <th width="12%">Horario</th>
-                <th width="10%">Duración</th>
+                <th width="8%">Duración</th>
                 <th width="10%">Distancia</th>
-                <th width="10%">Costo Est.</th>
-                <th width="24%">Punto Inicial</th>
-                <th width="24%">Punto Final</th>
+                <th width="8%">Costo</th>
+                <th width="20%">Punto Inicial</th>
+                <th width="20%">Punto Final</th>
+                <th width="12%">Acción</th>
             </tr>
         </thead>
         <tbody>
@@ -76,26 +91,31 @@
                 <td>{{ $t['start_time'] }} - {{ $t['end_time'] }}</td>
                 <td>{{ $t['duration'] }}</td>
                 <td>{{ $t['distance'] }} km</td>
-                <td><span class="cost">${{ $t['fuel_est'] }}</span></td>
+                <td><span class="cost-badge">${{ $t['fuel_est'] }}</span></td>
+                
                 <td>
-                    <a href="https://maps.google.com/?q={{ $t['start_lat'] }},{{ $t['start_lon'] }}" target="_blank" class="map-link">
-                        📍 Ver en Mapa
-                    </a><br>
-                    <span style="color:#64748b; font-size:9px">{{ number_format($t['start_lat'], 5) }}, {{ number_format($t['start_lon'], 5) }}</span>
+                    <span class="dot dot-green"></span> Inicio<br>
+                    <span class="coord">{{ number_format($t['start_lat'], 5) }}, {{ number_format($t['start_lon'], 5) }}</span>
                 </td>
+
                 <td>
-                    <a href="https://maps.google.com/?q={{ $t['end_lat'] }},{{ $t['end_lon'] }}" target="_blank" class="map-link">
-                        🏁 Ver en Mapa
-                    </a><br>
-                    <span style="color:#64748b; font-size:9px">{{ number_format($t['end_lat'], 5) }}, {{ number_format($t['end_lon'], 5) }}</span>
+                    <span class="dot dot-red"></span> Fin<br>
+                    <span class="coord">{{ number_format($t['end_lat'], 5) }}, {{ number_format($t['end_lon'], 5) }}</span>
+                </td>
+
+                <td style="text-align: center;">
+                    <a href="{{ $t['route_link'] }}" target="_blank" class="btn-map">
+                        🗺️ Ver Ruta
+                    </a>
                 </td>
             </tr>
             @endforeach
         </tbody>
     </table>
 
-    <div style="margin-top: 20px; font-size: 9px; color: #94a3b8; text-align: center;">
-        * El costo estimado se basa en un rendimiento promedio de 10km/L y gasolina a $24.00/L.
+    <div style="margin-top: 30px; text-align: center; color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 10px;">
+        Reporte generado automáticamente el {{ $generated_at }}. 
+        La ruta visualizada en Google Maps es una aproximación basada en puntos de inicio y fin.
     </div>
 
 </body>
