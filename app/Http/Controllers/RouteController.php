@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
-
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class RouteController extends Controller
 {
@@ -98,7 +98,7 @@ class RouteController extends Controller
             // Consulta base - ✅ ORDENAR POR TIMESTAMP
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
-                
+
                 // 1. FILTRO ANTI-GHOST (Esto elimina el viaje de África/Océano)
                 ->where('latitude', '!=', 0)
                 ->where('longitude', '!=', 0)
@@ -106,7 +106,7 @@ class RouteController extends Controller
                 // ❌ ELIMINAMOS EL FILTRO DE MÉXICO TEMPORALMENTE
                 // Como tus datos son positivos (103.28), el filtro negativo los borraba.
                 // Al quitar esto, tus viajes volverán a aparecer.
-                
+
                 ->orderBy('timestamp', 'ASC');
 
             // Aplicar filtros
@@ -882,7 +882,7 @@ class RouteController extends Controller
 
             // Corrección China -> México (Si es positivo, lo hacemos negativo)
             if ($lon > 80 && $lon < 180) $lon = $lon * -1;
-            
+
             // Actualizamos el objeto en memoria
             $loc->latitude = $lat;
             $loc->longitude = $lon;
@@ -891,7 +891,7 @@ class RouteController extends Controller
 
         // 4. DETECCIÓN DE RUTAS (Usamos tu lógica para tiempos y cortes)
         $routes = $this->detectMultipleRoutes(
-            $cleanLocations, 
+            $cleanLocations,
             $request->max_interval_minutes ?? 5,
             $device
         );
@@ -912,21 +912,23 @@ class RouteController extends Controller
             foreach ($dayRoutes as $route) {
                 $points = $route['points'] ?? []; // Asegúrate que tu detectMultipleRoutes devuelva 'points'
                 $routeDist = 0;
-                
+
                 for ($i = 0; $i < count($points) - 1; $i++) {
                     $p1 = $points[$i];
-                    $p2 = $points[$i+1];
-                    
+                    $p2 = $points[$i + 1];
+
                     // Calculamos distancia real entre puntos
                     $dist = $this->haversineGreatCircleDistance(
-                        $p1['latitude'] ?? $p1['lat'], $p1['longitude'] ?? $p1['lon'],
-                        $p2['latitude'] ?? $p2['lat'], $p2['longitude'] ?? $p2['lon']
+                        $p1['latitude'] ?? $p1['lat'],
+                        $p1['longitude'] ?? $p1['lon'],
+                        $p2['latitude'] ?? $p2['lat'],
+                        $p2['longitude'] ?? $p2['lon']
                     );
 
                     // FILTRO ANTI-TELETRANSPORTACIÓN
                     // Si la distancia entre dos reportes (segundos de diferencia) es > 500km, es un error.
                     // Un coche no viaja 500km en 1 minuto.
-                    if ($dist < 200) { 
+                    if ($dist < 200) {
                         $routeDist += $dist;
                     }
                 }
@@ -969,7 +971,7 @@ class RouteController extends Controller
 
         $angle = 2 * asin(sqrt(pow(sin($latDelta / 2), 2) +
             cos($latFrom) * cos($latTo) * pow(sin($lonDelta / 2), 2)));
-            
+
         return $angle * $earthRadius; // Devuelve metros
     }
 
@@ -1294,8 +1296,9 @@ class RouteController extends Controller
         // 1. Validaciones
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'alarm_type' => 'nullable|string', // Ojo: el nombre del param debe coincidir
+            'end_date'   => 'required|date|after_or_equal:start_date',
+            'alarm_type' => 'nullable|string',
+            'format'     => 'nullable|string|in:csv,pdf' // Nuevo campo
         ]);
 
         if ($validator->fails()) return response()->json(['success' => false], 400);
@@ -1303,61 +1306,99 @@ class RouteController extends Controller
         try {
             $device = Device::findOrFail($deviceId);
             $timezone = 'America/Mexico_City';
-
-            // Configurar fechas
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
+            $format = $request->format ?? 'csv'; // Por defecto CSV
 
-            // 2. Preparar el archivo en memoria (StreamedResponse)
+            // 2. Construir Query Base (Común para ambos)
+            $query = DB::table('notifications')
+                ->where('data->device_id', $device->id)
+                ->whereBetween('created_at', [$startDate, $endDate])
+                ->orderBy('created_at', 'DESC');
+
+            if ($request->alarm_type && $request->alarm_type !== 'all') {
+                $query->where('type', $request->alarm_type);
+            }
+
+            // ==========================================
+            // OPCIÓN A: GENERAR PDF (Reporte Ejecutivo)
+            // ==========================================
+            if ($format === 'pdf') {
+                // Para PDF traemos todo (limitado a un número razonable, ej. 500)
+                // PDF no soporta streaming chunked tan fácil, se renderiza en memoria.
+                $notifications = $query->limit(500)->get()->map(function ($notif) use ($timezone) {
+                    // Procesar datos para la vista
+                    $data = is_string($notif->data) ? json_decode($notif->data, true) : $notif->data;
+                    $lat = (float)($data['latitude'] ?? 0);
+                    $lon = (float)($data['longitude'] ?? 0);
+
+                    // 🔥 CORRECCIÓN CHINA -> MÉXICO
+                    if ($lon > 80 && $lon < 180) $lon = $lon * -1;
+
+                    $notif->formatted_date = Carbon::parse($notif->created_at)->setTimezone($timezone);
+                    $notif->lat = $lat;
+                    $notif->lon = $lon;
+                    $notif->speed = $data['speed'] ?? 0;
+                    $notif->maps_link = ($lat && $lon) ? "https://www.google.com/maps?q={$lat},{$lon}" : '#';
+
+                    return $notif;
+                });
+
+                $pdfData = [
+                    'device' => $device,
+                    'alarms' => $notifications,
+                    'start_date' => $request->start_date,
+                    'end_date' => $request->end_date,
+                    'date_now' => now()->setTimezone($timezone)->format('d/m/Y H:i'),
+                    // 'logo' => public_path('img/logo.png') // Descomenta si tienes logo
+                ];
+
+                // Cargar vista Blade
+                $pdf = Pdf::loadView('reports.alarms_pdf', $pdfData);
+                return $pdf->download("Reporte_{$device->name}.pdf");
+            }
+
+            // ==========================================
+            // OPCIÓN B: GENERAR CSV (Datos Crudos)
+            // ==========================================
             $fileName = "Alarmas_{$device->name}_" . date('Y-m-d_His') . ".csv";
-            
             $headers = [
-                "Content-type"        => "text/csv",
+                "Content-type" => "text/csv",
                 "Content-Disposition" => "attachment; filename=$fileName",
-                "Pragma"              => "no-cache",
-                "Cache-Control"       => "must-revalidate, post-check=0, pre-check=0",
-                "Expires"             => "0"
+                "Pragma" => "no-cache",
+                "Expires" => "0"
             ];
 
-            $callback = function() use ($device, $startDate, $endDate, $request, $timezone) {
+            $callback = function () use ($query, $device, $request, $timezone) {
                 $file = fopen('php://output', 'w');
-                fputs($file, "\xEF\xBB\xBF"); // BOM para acentos
+                fputs($file, "\xEF\xBB\xBF"); // BOM
 
-                // Encabezados del CSV
+                // Encabezados Estéticos
                 fputcsv($file, ['REPORTE DE ALARMAS']);
                 fputcsv($file, ['Dispositivo:', $device->name]);
-                fputcsv($file, ['Desde:', $request->start_date]);
-                fputcsv($file, ['Hasta:', $request->end_date]);
-                fputcsv($file, []); // Espacio
+                fputcsv($file, ['Periodo:', $request->start_date . ' al ' . $request->end_date]);
+                fputcsv($file, []);
                 fputcsv($file, ['Fecha', 'Hora', 'Tipo', 'Mensaje', 'Velocidad (km/h)', 'Latitud', 'Longitud', 'Google Maps']);
 
-                // 3. Consulta (Idéntica a tu getAlarmsReport)
-                $query = DB::table('notifications')
-                    ->where('data->device_id', $device->id)
-                    ->whereBetween('created_at', [$startDate, $endDate])
-                    ->orderBy('created_at', 'DESC');
-
-                // Aplicar filtro de tipo si existe
-                if ($request->alarm_type && $request->alarm_type !== 'all') {
-                    $query->where('type', $request->alarm_type);
-                }
-
-                // Usamos chunk para procesar grandes cantidades sin llenar la RAM
-                $query->chunk(500, function($notifications) use ($file, $timezone) {
+                $query->chunk(500, function ($notifications) use ($file, $timezone) {
                     foreach ($notifications as $notif) {
-                        // Decodificar el JSON 'data' para obtener detalles extra
                         $extraData = is_string($notif->data) ? json_decode($notif->data, true) : $notif->data;
-                        
                         $date = Carbon::parse($notif->created_at)->setTimezone($timezone);
-                        $lat = $extraData['latitude'] ?? 0;
-                        $lon = $extraData['longitude'] ?? 0;
-                        $mapsLink = ($lat && $lon) ? "https://maps.google.com/?q={$lat},{$lon}" : '';
+
+                        $lat = (float)($extraData['latitude'] ?? 0);
+                        $lon = (float)($extraData['longitude'] ?? 0);
+
+                        // 🔥 CORRECCIÓN CHINA -> MÉXICO EN CSV TAMBIÉN
+                        if ($lon > 80 && $lon < 180) $lon = $lon * -1;
+
+                        // Link corregido de Google Maps
+                        $mapsLink = ($lat && $lon) ? "https://www.google.com/maps?q={$lat},{$lon}" : '';
 
                         fputcsv($file, [
                             $date->format('Y-m-d'),
                             $date->format('H:i:s'),
                             $notif->type,
-                            $notif->message, // O $notif->title
+                            $notif->message,
                             $extraData['speed'] ?? 0,
                             $lat,
                             $lon,
@@ -1365,12 +1406,10 @@ class RouteController extends Controller
                         ]);
                     }
                 });
-
                 fclose($file);
             };
 
             return response()->stream($callback, 200, $headers);
-
         } catch (\Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
