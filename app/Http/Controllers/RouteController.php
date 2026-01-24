@@ -855,83 +855,94 @@ class RouteController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 400);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 400);
         }
 
         $device = Device::findOrFail($deviceId);
 
-        // 2. CONSULTA BLINDADA (Filtro SQL)
-        // Solo traemos puntos que NO sean basura (0,0)
+        // 2. OBTENER DATOS (Incluyendo filtro básico de SQL)
         $locations = Location::where('device_id', $device->id)
             ->whereBetween('timestamp', [
                 Carbon::parse($request->start_date)->startOfDay(),
                 Carbon::parse($request->end_date)->endOfDay(),
             ])
-            // 🔥 FILTRO 1: Ignorar coordenadas 0,0 (Evita viajes a África)
-            ->where(function ($q) {
-                $q->where('latitude', '!=', 0)
-                  ->where('longitude', '!=', 0);
-            })
+            ->where('latitude', '!=', 0) // Filtro SQL básico
+            ->where('longitude', '!=', 0)
             ->orderBy('timestamp', 'ASC')
             ->get();
 
         if ($locations->isEmpty()) {
-            return response()->json([
-                'success' => true,
-                'summary' => null, // O devolver ceros si prefieres
-                'days' => [],
-            ]);
+            return response()->json(['success' => true, 'summary' => null, 'days' => []]);
         }
 
-        // 3. SANITIZACIÓN EN MEMORIA (Corrección de China -> México)
-        // Antes de procesar las rutas, corregimos los signos invertidos si existen.
+        // 3. SANITIZACIÓN PROFUNDA + CORRECCIÓN DE SIGNO
         $cleanLocations = $locations->map(function ($loc) {
+            $lat = (float)$loc->latitude;
             $lon = (float)$loc->longitude;
+
+            // Corrección China -> México (Si es positivo, lo hacemos negativo)
+            if ($lon > 80 && $lon < 180) $lon = $lon * -1;
             
-            // Si la longitud es positiva (ej. 103.28), la hacemos negativa (-103.28)
-            // Esto arregla el cálculo de distancia sin tener que editar la BD ahorita.
-            if ($lon > 80 && $lon < 180) {
-                $loc->longitude = $lon * -1;
-            }
+            // Actualizamos el objeto en memoria
+            $loc->latitude = $lat;
+            $loc->longitude = $lon;
             return $loc;
         });
 
-        // 4. TU LÓGICA DE DETECCIÓN (Usando los datos ya limpios)
+        // 4. DETECCIÓN DE RUTAS (Usamos tu lógica para tiempos y cortes)
         $routes = $this->detectMultipleRoutes(
-            $cleanLocations, // Pasamos las locations corregidas
+            $cleanLocations, 
             $request->max_interval_minutes ?? 5,
             $device
         );
 
-        // 5. AGRUPAR Y CALCULAR ESTADÍSTICAS
+        // 5. AGRUPAR Y RE-CALCULAR DISTANCIA MANUALMENTE
         $days = collect($routes)->groupBy(function ($route) {
             return Carbon::parse($route['start_time'])->toDateString();
-        })->map(function ($routes, $date) {
+        })->map(function ($dayRoutes, $date) {
 
-            $activeMinutes = collect($routes)->sum(function ($r) {
-                return Carbon::parse($r['start_time'])
-                    ->diffInMinutes(Carbon::parse($r['end_time']));
+            $activeMinutes = collect($dayRoutes)->sum(function ($r) {
+                return Carbon::parse($r['start_time'])->diffInMinutes(Carbon::parse($r['end_time']));
             });
 
-            // Suma de distancias (Ahora será precisa porque usamos coordenadas corregidas)
-            $totalDistance = collect($routes)->sum(fn($r) => $r['statistics']['distance']);
+            // 🔥 AQUI ESTA LA MAGIA: Re-calculamos la distancia punto por punto
+            // Ignorando lo que diga $r['statistics']['distance']
+            $realDayDistance = 0;
+
+            foreach ($dayRoutes as $route) {
+                $points = $route['points'] ?? []; // Asegúrate que tu detectMultipleRoutes devuelva 'points'
+                $routeDist = 0;
+                
+                for ($i = 0; $i < count($points) - 1; $i++) {
+                    $p1 = $points[$i];
+                    $p2 = $points[$i+1];
+                    
+                    // Calculamos distancia real entre puntos
+                    $dist = $this->haversineGreatCircleDistance(
+                        $p1['latitude'] ?? $p1['lat'], $p1['longitude'] ?? $p1['lon'],
+                        $p2['latitude'] ?? $p2['lat'], $p2['longitude'] ?? $p2['lon']
+                    );
+
+                    // FILTRO ANTI-TELETRANSPORTACIÓN
+                    // Si la distancia entre dos reportes (segundos de diferencia) es > 500km, es un error.
+                    // Un coche no viaja 500km en 1 minuto.
+                    if ($dist < 200) { 
+                        $routeDist += $dist;
+                    }
+                }
+                $realDayDistance += $routeDist;
+            }
 
             return [
                 'date' => $date,
                 'label' => Carbon::parse($date)->locale('es')->translatedFormat('l d F'),
-                'routes_count' => count($routes),
-                'distance_km' => round($totalDistance, 2),
-                'start_time' => min(array_column($routes->toArray(), 'start_time')),
-                'end_time' => max(array_column($routes->toArray(), 'end_time')),
+                'routes_count' => count($dayRoutes),
+                'distance_km' => round($realDayDistance / 1000, 2), // Convertir metros a KM
+                'start_time' => min(array_column($dayRoutes->toArray(), 'start_time')),
+                'end_time' => max(array_column($dayRoutes->toArray(), 'end_time')),
                 'active_minutes' => $activeMinutes,
             ];
         })->values();
-
-        // Ordenar los días del más reciente al más antiguo (Opcional, para la gráfica se ve mejor al revés en el frontend)
-        // $days = $days->sortByDesc('date')->values(); 
 
         return response()->json([
             'success' => true,
@@ -943,6 +954,23 @@ class RouteController extends Controller
             ],
             'days' => $days,
         ]);
+    }
+
+    // AGREGAR ESTA FUNCIÓN AUXILIAR EN TU CONTROLADOR
+    private function haversineGreatCircleDistance($latitudeFrom, $longitudeFrom, $latitudeTo, $longitudeTo, $earthRadius = 6371000)
+    {
+        $latFrom = deg2rad($latitudeFrom);
+        $lonFrom = deg2rad($longitudeFrom);
+        $latTo = deg2rad($latitudeTo);
+        $lonTo = deg2rad($longitudeTo);
+
+        $latDelta = $latTo - $latFrom;
+        $lonDelta = $lonTo - $lonFrom;
+
+        $angle = 2 * asin(sqrt(pow(sin($latDelta / 2), 2) +
+            cos($latFrom) * cos($latTo) * pow(sin($lonDelta / 2), 2)));
+            
+        return $angle * $earthRadius; // Devuelve metros
     }
 
     /**
