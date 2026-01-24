@@ -1812,6 +1812,7 @@ class RouteController extends Controller
     } */
     public function exportTripsReport(Request $request, $deviceId)
     {
+        // 1. Validación
         $request->validate([
             'start_date' => 'required|date',
             'end_date'   => 'required|date|after_or_equal:start_date',
@@ -1826,30 +1827,24 @@ class RouteController extends Controller
             $start = Carbon::parse($request->start_date)->startOfDay();
             $end = Carbon::parse($request->end_date)->endOfDay();
 
-            // 1. OBTENER DATOS CRUDOS
+            // 2. OBTENER DATOS (Incluyendo sanitización anti-salto)
             $locations = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$start, $end])
                 ->where('latitude', '!=', 0)
                 ->orderBy('timestamp', 'ASC')
                 ->get();
 
-            // 🔥 2. SANITIZACIÓN OBLIGATORIA (CORRECCIÓN KM FANTASMAS)
-            // Antes de procesar rutas, corregimos cualquier punto que haya caído en China
+            // Corrección de coordenadas (China -> América)
             $locations->transform(function ($loc) {
                 $lat = (float)$loc->latitude;
                 $lon = (float)$loc->longitude;
-
-                // Si la longitud es positiva (Asia) y debería ser negativa (América)
-                if ($lon > 80 && $lon < 180) {
-                    $lon = $lon * -1;
-                }
-
+                if ($lon > 80 && $lon < 180) $lon = $lon * -1;
                 $loc->latitude = $lat;
                 $loc->longitude = $lon;
                 return $loc;
             });
 
-            // 3. DETECTAR RUTAS (Con datos ya limpios)
+            // 3. DETECTAR RUTAS
             $routesRaw = $this->detectMultipleRoutes($locations, 10, $device);
 
             $tripsData = [];
@@ -1859,13 +1854,44 @@ class RouteController extends Controller
                 $distKm = $route['statistics']['distance'] ?? 0;
                 $durationSec = $route['statistics']['duration'] ?? 0;
                 $maxSpeed = $route['statistics']['max_speed'] ?? 0;
+                $points = $route['points'];
 
-                // Puntos Inicio/Fin
-                $startPt = $route['points'][0];
-                $endPt = end($route['points']);
+                // --- LÓGICA DE MAPA DETALLADO (WAYPOINTS) ---
+                $startPt = $points[0];
+                $endPt = end($points);
 
-                // Generar Link de Ruta (Direcciones)
-                $routeLink = "https://www.google.com/maps/dir/?api=1&origin={$startPt['lat']},{$startPt['lon']}&destination={$endPt['lat']},{$endPt['lon']}";
+                // Generar Link con Waypoints Intermedios
+                // Google Maps acepta un límite, tomaremos hasta 15 puntos intermedios para definir la ruta
+                $waypoints = [];
+                $totalPoints = count($points);
+
+                if ($totalPoints > 2) {
+                    // Calcular el "salto" para tomar puntos distribuidos uniformemente
+                    // Queremos máximo 15 waypoints intermedios para no romper la URL
+                    $step = ceil($totalPoints / 15);
+                    // Aseguramos que el step sea al menos 1
+                    $step = $step < 1 ? 1 : $step;
+
+                    for ($i = $step; $i < $totalPoints - 1; $i += $step) {
+                        $pt = $points[$i];
+                        // Formato: lat,lon
+                        $waypoints[] = number_format($pt['lat'], 6, '.', '') . ',' . number_format($pt['lon'], 6, '.', '');
+                    }
+                }
+
+                // Construir URL de Google Maps Dir
+                // api=1, origin, destination, waypoints (separados por |)
+                $originStr = number_format($startPt['lat'], 6, '.', '') . ',' . number_format($startPt['lon'], 6, '.', '');
+                $destStr = number_format($endPt['lat'], 6, '.', '') . ',' . number_format($endPt['lon'], 6, '.', '');
+
+                $routeLink = "https://www.google.com/maps/dir/?api=1&origin={$originStr}&destination={$destStr}";
+
+                if (!empty($waypoints)) {
+                    // Unimos los waypoints con pipe (|) codificado o directo
+                    $waypointsStr = implode('|', $waypoints);
+                    $routeLink .= "&waypoints={$waypointsStr}";
+                }
+                // ---------------------------------------------
 
                 $trip = [
                     'start_time' => Carbon::parse($route['start_time'])->setTimezone($timezone)->format('H:i'),
@@ -1874,17 +1900,17 @@ class RouteController extends Controller
                     'distance'   => $distKm,
                     'duration'   => $route['statistics']['duration_human'],
                     'max_speed'  => $maxSpeed,
-                    'fuel_est'   => round(($distKm / 10) * 24.50, 2), // Ajusta precio/rendimiento si lo tienes en BD
+                    'fuel_est'   => round(($distKm / 10) * 24.50, 2),
 
                     // Coordenadas
                     'start_lat'  => $startPt['lat'],
                     'start_lon'  => $startPt['lon'],
                     'end_lat'    => $endPt['lat'],
                     'end_lon'    => $endPt['lon'],
-                    'route_link' => $routeLink
+                    'route_link' => $routeLink // ✅ Link mejorado con ruta trazada
                 ];
 
-                // Filtro visual: Si por alguna razón extrema sigue dando > 2000km un solo viaje, lo mostramos pero lo marcamos
+                // Filtro de consistencia visual (ignorar saltos > 2000km)
                 if ($distKm < 2000) {
                     $tripsData[] = $trip;
                     $summary['total_trips']++;
@@ -1894,6 +1920,9 @@ class RouteController extends Controller
                 }
             }
 
+            // ==========================================
+            // 🅰️ SALIDA PDF
+            // ==========================================
             if ($format === 'pdf') {
                 $logoPath = public_path('images/logo.png');
                 $logoData = null;
@@ -1915,8 +1944,7 @@ class RouteController extends Controller
                 return $pdf->setPaper('a4', 'landscape')->download("Viajes_{$device->name}.pdf");
             }
 
-            // CSV (Lógica simplificada para ahorrar espacio en esta respuesta)
-             // ==========================================
+            // ==========================================
             // 🅱️ SALIDA CSV
             // ==========================================
             $fileName = "Viajes_{$device->name}.csv";
@@ -1929,7 +1957,7 @@ class RouteController extends Controller
                 fputcsv($file, ['Unidad:', $device->name]);
                 fputcsv($file, ['Periodo:', $request->start_date . ' - ' . $request->end_date]);
                 fputcsv($file, []);
-                fputcsv($file, ['Fecha', 'Hora Inicio', 'Hora Fin', 'Distancia (km)', 'Duración', 'Costo Est. ($)', 'Link Inicio', 'Link Fin']);
+                fputcsv($file, ['Fecha', 'Hora Inicio', 'Hora Fin', 'Distancia (km)', 'Duración', 'Costo ($)', 'Ver en Mapa']);
 
                 foreach ($tripsData as $t) {
                     fputcsv($file, [
@@ -1939,8 +1967,7 @@ class RouteController extends Controller
                         $t['distance'],
                         $t['duration'],
                         $t['fuel_est'],
-                        "http://maps.google.com/?q={$t['start_lat']},{$t['start_lon']}",
-                        "http://maps.google.com/?q={$t['end_lat']},{$t['end_lon']}"
+                        $t['route_link'] // Link detallado
                     ]);
                 }
                 fclose($file);
