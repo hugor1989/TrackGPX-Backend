@@ -980,116 +980,124 @@ class RouteController extends Controller
      */
     public function exportActivityReport(Request $request, $deviceId)
     {
-        // 1. Validar fechas y formato
-        $request->validate([
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'format' => 'nullable|in:csv,pdf' // Nuevo parámetro
-        ]);
-
+        // 1. Configuración
         $device = Device::findOrFail($deviceId);
-        $format = $request->format ?? 'csv';
-        $timezone = 'America/Mexico_City';
-
+        $timezone = 'America/Mexico_City'; // Ajusta a tu zona
         $startDate = Carbon::parse($request->start_date)->startOfDay();
         $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-        // 2. OBTENER Y CORREGIR DATOS (La parte vital para eliminar errores)
-        // Traemos los puntos ordenados para no tener tiempos negativos
+        // 2. OBTENER DATOS (Ordenados cronológicamente es VITAL)
         $locations = Location::where('device_id', $device->id)
             ->whereBetween('timestamp', [$startDate, $endDate])
             ->where('latitude', '!=', 0)
-            ->orderBy('timestamp', 'ASC') // 🔥 CRUCIAL: Ordenar por tiempo
+            ->orderBy('timestamp', 'ASC') // 🔥 ESTO EVITA TIEMPOS NEGATIVOS
             ->get();
 
-        // Agrupamos por día
+        // 3. PROCESAMIENTO INTELIGENTE POR DÍA
         $daysData = [];
-        $currentDate = $startDate->copy();
+        $periodSummary = [
+            'total_km' => 0,
+            'max_speed' => 0,
+            'move_time' => 0
+        ];
 
-        // Inicializar todos los días del rango en 0
-        while ($currentDate->lte($endDate)) {
-            $dateKey = $currentDate->format('Y-m-d');
-            $daysData[$dateKey] = [
-                'date' => $currentDate->locale('es')->isoFormat('dddd D [de] MMMM'),
-                'raw_date' => $dateKey,
-                'distance_km' => 0,
-                'duration_minutes' => 0,
-                'max_speed' => 0,
-                'start_time' => '--:--',
-                'end_time' => '--:--',
-                'routes' => 0
-            ];
-            $currentDate->addDay();
-        }
+        // Iteramos día por día del rango
+        $current = $startDate->copy();
+        while ($current->lte($endDate)) {
+            $dateKey = $current->format('Y-m-d');
 
-        // Procesar puntos (Algoritmo corregido)
-        $groupedPoints = $locations->groupBy(function ($loc) use ($timezone) {
-            return Carbon::parse($loc->timestamp)->setTimezone($timezone)->format('Y-m-d');
-        });
+            // Filtramos puntos de ESTE día
+            $dayPoints = $locations->filter(function ($loc) use ($dateKey, $timezone) {
+                return Carbon::parse($loc->timestamp)->setTimezone($timezone)->format('Y-m-d') === $dateKey;
+            })->values();
 
-        foreach ($groupedPoints as $dateKey => $points) {
-            if (!isset($daysData[$dateKey])) continue;
+            if ($dayPoints->count() > 1) {
+                $dayDist = 0;
+                $dayMaxSpeed = 0;
+                $moveTimeMinutes = 0;
 
-            // Limpieza de coordenadas (Anti-China)
-            $cleanPoints = $points->map(function ($p) {
-                $lat = (float)$p->latitude;
-                $lon = (float)$p->longitude;
-                if ($lon > 80 && $lon < 180) $lon *= -1; // Corrección
-                return ['lat' => $lat, 'lon' => $lon, 'speed' => $p->speed, 'time' => Carbon::parse($p->timestamp)];
-            });
+                // Puntos de inicio y fin REALES de movimiento
+                $firstMove = null;
+                $lastMove = null;
 
-            // Cálculos
-            $totalDist = 0;
-            $maxSpeed = 0;
-            $startTime = $cleanPoints->first()['time'];
-            $endTime = $cleanPoints->last()['time'];
+                for ($i = 0; $i < $dayPoints->count() - 1; $i++) {
+                    $p1 = $dayPoints[$i];
+                    $p2 = $dayPoints[$i + 1];
 
-            for ($i = 0; $i < count($cleanPoints) - 1; $i++) {
-                $p1 = $cleanPoints[$i];
-                $p2 = $cleanPoints[$i + 1];
+                    // Distancia
+                    $dist = $this->haversine($p1->latitude, $p1->longitude, $p2->latitude, $p2->longitude);
 
-                // Distancia entre puntos
-                $dist = $this->haversine($p1['lat'], $p1['lon'], $p2['lat'], $p2['lon']);
+                    // Filtros de Calidad:
+                    // 1. Ignorar saltos locos (> 200km/h imposibles)
+                    // 2. Velocidad máxima realista
+                    $speed = $p1->speed;
 
-                // Filtro de "Saltos Imposibles" (Evita los 5000km falsos)
-                if ($dist < 2000) { // Menos de 2km entre reporte y reporte
-                    $totalDist += $dist;
+                    if ($dist < 5000) { // Menos de 5km entre reporte y reporte (filtro anti-salto)
+                        $dayDist += $dist;
+                        if ($speed > $dayMaxSpeed && $speed < 180) $dayMaxSpeed = $speed; // Filtro max 180km/h
+                    }
+
+                    // Lógica de Tiempo: Solo si se movió o encendió
+                    if ($speed > 3) {
+                        if (!$firstMove) $firstMove = Carbon::parse($p1->timestamp)->setTimezone($timezone);
+                        $lastMove = Carbon::parse($p2->timestamp)->setTimezone($timezone);
+                    }
                 }
-                if ($p1['speed'] > $maxSpeed) $maxSpeed = $p1['speed'];
-            }
 
-            // Guardar stats del día
-            $daysData[$dateKey]['distance_km'] = round($totalDist / 1000, 2);
-            $daysData[$dateKey]['max_speed'] = round($maxSpeed);
-            $daysData[$dateKey]['routes'] = 1; // Simplificado, puedes usar tu lógica de detección de rutas
+                // Guardamos datos del día
+                $km = round($dayDist / 1000, 2);
+                $daysData[] = [
+                    'date_human' => $current->locale('es')->isoFormat('dddd D [de] MMMM'),
+                    'is_active' => $km > 0.5, // Consideramos activo si movió más de 500 metros
+                    'distance' => $km,
+                    'max_speed' => round($dayMaxSpeed),
+                    'start_time' => $firstMove ? $firstMove->format('H:i') : '--',
+                    'end_time' => $lastMove ? $lastMove->format('H:i') : '--',
+                    'duration' => ($firstMove && $lastMove) ? $firstMove->diff($lastMove)->format('%Hh %Im') : '--'
+                ];
 
-            // Cálculo de Tiempo Activo (Solo si hubo movimiento real)
-            if ($daysData[$dateKey]['distance_km'] > 0.5) {
-                $daysData[$dateKey]['start_time'] = $startTime->setTimezone($timezone)->format('H:i');
-                $daysData[$dateKey]['end_time'] = $endTime->setTimezone($timezone)->format('H:i');
-                $daysData[$dateKey]['duration_minutes'] = $startTime->diffInMinutes($endTime);
+                // Sumar al total
+                $periodSummary['total_km'] += $km;
+                if ($dayMaxSpeed > $periodSummary['max_speed']) $periodSummary['max_speed'] = $dayMaxSpeed;
+                if ($firstMove && $lastMove) $periodSummary['move_time'] += $firstMove->diffInMinutes($lastMove);
+            } else {
+                // Día vacío
+                $daysData[] = [
+                    'date_human' => $current->locale('es')->isoFormat('dddd D [de] MMMM'),
+                    'is_active' => false,
+                    'distance' => 0,
+                    'max_speed' => 0,
+                    'start_time' => '--',
+                    'end_time' => '--',
+                    'duration' => '--'
+                ];
             }
+            $current->addDay();
         }
 
-        // 3. GENERAR PDF (Diseño Profesional)
-        if ($format === 'pdf') {
-            $pdfData = [
-                'device' => $device,
-                'days' => $daysData,
-                'start_date' => $request->start_date,
-                'end_date' => $request->end_date,
-                'logo' => public_path('images/logo.png'), // Aseguúrate de tener un logo aquí
-                'total_km' => collect($daysData)->sum('distance_km'),
-                'generated_at' => now()->setTimezone($timezone)->format('d/m/Y H:i')
-            ];
-
-            $pdf = Pdf::loadView('reports.activity_pdf', $pdfData);
-            return $pdf->download("Reporte_{$device->name}.pdf");
+        // 4. PREPARAR LOGO (Base64 para que no falle en PDF)
+        // Asegúrate de tener logo.png en public/images/
+        $path = public_path('images/logo.png');
+        $logoData = '';
+        if (file_exists($path)) {
+            $type = pathinfo($path, PATHINFO_EXTENSION);
+            $data = file_get_contents($path);
+            $logoData = 'data:image/' . $type . ';base64,' . base64_encode($data);
         }
 
-        // 4. GENERAR CSV (Datos Crudos Corregidos)
-        // ... (Tu código de Stream CSV existente iría aquí, pero usando $daysData que ya está limpio) ...
-        // ... Por brevedad, omito repetir el stream, pero usa $daysData para llenar las filas ...
+        // 5. GENERAR PDF
+        $pdf = Pdf::loadView('reports.activity_pdf_pro', [
+            'device' => $device,
+            'client_name' => 'Transportes Logísticos S.A.', // Puedes sacarlo de $device->user->name
+            'range' => $request->start_date . ' al ' . $request->end_date,
+            'days' => $daysData,
+            'summary' => $periodSummary,
+            'logo' => $logoData,
+            'generated_at' => now()->setTimezone($timezone)->format('d/m/Y H:i')
+        ]);
+
+        // OJO: setPaper 'a4' es estándar para imprimir
+        return $pdf->setPaper('a4', 'portrait')->download("Reporte_{$device->name}.pdf");
     }
 
     /**
