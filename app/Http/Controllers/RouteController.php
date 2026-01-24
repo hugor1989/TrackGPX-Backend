@@ -1253,16 +1253,16 @@ class RouteController extends Controller
                     'message' => $notification->message,
                     'timestamp' => $notification->created_at,
                     'is_read' => (bool)$notification->is_read,
-                    
+
                     // Enviamos los datos YA CORREGIDOS al nivel raíz
                     // Esto facilita la vida a tu Frontend (React Native)
                     'latitude' => $lat,
                     'longitude' => $lon,
                     'speed' => $speed,
                     'battery' => $battery,
-                    
+
                     // Mantenemos data original por si acaso, pero ya no es vital
-                    'data' => $data, 
+                    'data' => $data,
                 ];
             });
 
@@ -1295,7 +1295,6 @@ class RouteController extends Controller
                 'alarms' => $processedAlarms, // Enviamos la lista procesada
                 'message' => $notifications->count() . ' alarmas encontradas'
             ]);
-
         } catch (\Exception $e) {
             Log::error('Error reporte alarmas:', ['msg' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
@@ -1560,5 +1559,118 @@ class RouteController extends Controller
             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
             sin($dLon / 2) ** 2;
         return $r * (2 * atan2(sqrt($a), sqrt(1 - $a)));
+    }
+
+    //Reporte de paradas
+    public function getStopsReport(Request $request, $deviceId)
+    {
+        // 1. Configuración
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'min_minutes' => 'nullable|integer|min:1', // Mínimo tiempo para considerar parada (default 3 min)
+        ]);
+
+        if ($validator->fails()) return response()->json(['success' => false, 'errors' => $validator->errors()], 400);
+
+        try {
+            $device = Device::findOrFail($deviceId);
+            $start = Carbon::parse($request->start_date)->startOfDay();
+            $end = Carbon::parse($request->end_date)->endOfDay();
+            $minDurationMinutes = $request->min_minutes ?? 5; // Default: 5 minutos
+            $minSpeedKmh = 5; // Umbral de "cero movimiento"
+
+            // 2. Traer puntos crudos (Aplicamos filtros Anti-China y Anti-Ghost aquí mismo)
+            $locations = Location::where('device_id', $device->id)
+                ->whereBetween('timestamp', [$start, $end])
+                ->where('latitude', '!=', 0)
+                ->where('longitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC')
+                ->get(['latitude', 'longitude', 'speed', 'timestamp', 'battery_level']);
+
+            $stops = [];
+            $currentStop = null;
+
+            // 3. ALGORITMO DE DETECCIÓN DE PARADAS
+            foreach ($locations as $loc) {
+                // A. Sanitización de coordenadas (China -> México)
+                $lat = (float)$loc->latitude;
+                $lon = (float)$loc->longitude;
+                if ($lon > 80 && $lon < 180) $lon = $lon * -1;
+                $speed = (float)$loc->speed;
+
+                $isStopped = $speed < $minSpeedKmh;
+
+                if ($isStopped) {
+                    // Si ya estamos en una parada, la actualizamos
+                    if ($currentStop) {
+                        $currentStop['end_time'] = $loc->timestamp;
+                        $currentStop['last_lat'] = $lat; // Guardamos la última posición conocida
+                        $currentStop['last_lon'] = $lon;
+                    } else {
+                        // Iniciamos nueva parada candidata
+                        $currentStop = [
+                            'start_time' => $loc->timestamp,
+                            'end_time' => $loc->timestamp,
+                            'lat' => $lat,
+                            'lon' => $lon,
+                            'battery' => $loc->battery_level
+                        ];
+                    }
+                } else {
+                    // El auto se movió. Si teníamos una parada abierta, la cerramos.
+                    if ($currentStop) {
+                        $this->closeStop($stops, $currentStop, $minDurationMinutes);
+                        $currentStop = null;
+                    }
+                }
+            }
+            // Cerrar la última si quedó abierta
+            if ($currentStop) {
+                $this->closeStop($stops, $currentStop, $minDurationMinutes);
+            }
+
+            // 4. Resumen
+            $totalMinutesStopped = collect($stops)->sum('duration_minutes');
+
+            return response()->json([
+                'success' => true,
+                'summary' => [
+                    'total_stops' => count($stops),
+                    'total_duration_minutes' => $totalMinutesStopped,
+                    'total_duration_human' => $this->minutesToHuman($totalMinutesStopped)
+                ],
+                'stops' => array_reverse($stops) // Las más recientes primero
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    // Helpers privados
+    private function closeStop(&$stops, $currentStop, $minDuration)
+    {
+        $start = Carbon::parse($currentStop['start_time']);
+        $end = Carbon::parse($currentStop['end_time']);
+        $duration = $start->diffInMinutes($end);
+
+        if ($duration >= $minDuration) {
+            $stops[] = [
+                'start_time' => $start->format('Y-m-d H:i:s'),
+                'end_time' => $end->format('Y-m-d H:i:s'),
+                'duration_minutes' => $duration,
+                'duration_human' => $this->minutesToHuman($duration),
+                'latitude' => $currentStop['lat'],
+                'longitude' => $currentStop['lon'],
+                'battery' => $currentStop['battery']
+            ];
+        }
+    }
+
+    private function minutesToHuman($minutes)
+    {
+        $h = floor($minutes / 60);
+        $m = $minutes % 60;
+        return ($h > 0 ? "{$h}h " : "") . "{$m}m";
     }
 }
