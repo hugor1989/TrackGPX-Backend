@@ -1201,7 +1201,7 @@ class RouteController extends Controller
         }
 
         try {
-            // 2. Obtener Dispositivo + Configuración (Optimizado)
+            // 2. Obtener Dispositivo
             $device = Device::with('configuration')->findOrFail($deviceId);
 
             $deviceName = $device->configuration->custom_name
@@ -1211,17 +1211,13 @@ class RouteController extends Controller
             $startDate = Carbon::parse($request->start_date)->startOfDay();
             $endDate = Carbon::parse($request->end_date)->endOfDay();
 
-            // =========================================================
-            // 3. AQUÍ ESTÁ EL CAMBIO CLAVE (Búsqueda en JSON)
-            // =========================================================
+            // 3. Consulta a Base de Datos
             $query = DB::table('notifications')
-                // Laravel traduce esto a JSON_EXTRACT en MySQL
                 ->where('data->device_id', $device->id)
                 ->whereBetween('created_at', [$startDate, $endDate])
                 ->select('notifications.*')
                 ->orderBy('created_at', 'DESC');
 
-            // Filtros opcionales
             if ($request->alarm_type) {
                 $query->where('type', $request->alarm_type);
             }
@@ -1232,17 +1228,54 @@ class RouteController extends Controller
 
             $notifications = $query->get();
 
-            // 4. Agrupaciones (Igual que antes)
-            $groupedByType = $notifications->groupBy('type')->map(function ($items, $type) {
+            // 4. Transformación de Datos (AQUÍ ESTÁ LA MAGIA 🪄)
+            $processedAlarms = $notifications->map(function ($notification) {
+                // Decodificar JSON de forma segura
+                $data = is_string($notification->data) ? json_decode($notification->data, true) : $notification->data;
+                if (!is_array($data)) $data = [];
+
+                // Obtener valores crudos
+                $lat = (float)($data['latitude'] ?? 0);
+                $lon = (float)($data['longitude'] ?? 0);
+                $speed = (float)($data['speed'] ?? 0);
+                $battery = isset($data['battery_level']) ? (int)$data['battery_level'] : null;
+
+                // 🔥 CORRECCIÓN AUTOMÁTICA DE COORDENADAS (China -> México)
+                // Si la longitud es positiva (ej. 103) pero estamos en América, invertirla.
+                if ($lon > 80 && $lon < 180) {
+                    $lon = $lon * -1;
+                }
+
+                return [
+                    'id' => $notification->id,
+                    'type' => $notification->type,
+                    'title' => $notification->title ?? 'Alerta',
+                    'message' => $notification->message,
+                    'timestamp' => $notification->created_at,
+                    'is_read' => (bool)$notification->is_read,
+                    
+                    // Enviamos los datos YA CORREGIDOS al nivel raíz
+                    // Esto facilita la vida a tu Frontend (React Native)
+                    'latitude' => $lat,
+                    'longitude' => $lon,
+                    'speed' => $speed,
+                    'battery' => $battery,
+                    
+                    // Mantenemos data original por si acaso, pero ya no es vital
+                    'data' => $data, 
+                ];
+            });
+
+            // 5. Agrupaciones para las gráficas
+            $groupedByType = $processedAlarms->groupBy('type')->map(function ($items, $type) {
                 return [
                     'type' => $type,
                     'count' => $items->count(),
-                    'unread_count' => $items->where('is_read', 0)->count(),
-                    'last_occurrence' => $items->first()->created_at,
+                    'unread_count' => $items->where('is_read', false)->count(),
                 ];
             })->values();
 
-            // 5. Retornar Respuesta
+            // 6. Retornar Respuesta
             return response()->json([
                 'success' => true,
                 'device' => [
@@ -1257,31 +1290,12 @@ class RouteController extends Controller
                 'summary' => [
                     'total_alarms' => $notifications->count(),
                     'unread_alarms' => $notifications->where('is_read', 0)->count(),
-                    'read_alarms' => $notifications->where('is_read', 1)->count(),
                     'by_type' => $groupedByType,
                 ],
-                'alarms' => $notifications->map(function ($notification) {
-                    // Decodificamos el JSON data para usarlo en el front
-                    $data = is_string($notification->data) ? json_decode($notification->data, true) : $notification->data;
-
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'title' => $notification->title ?? 'Alerta',
-                        'message' => $notification->message,
-                        'timestamp' => $notification->created_at,
-                        'is_read' => (bool)$notification->is_read,
-                        // Extraemos lat/lon del JSON data
-                        'location' => [
-                            'lat' => $data['latitude'] ?? null,
-                            'lon' => $data['longitude'] ?? null,
-                        ],
-                        'speed' => $data['speed'] ?? 0,
-                        'battery' => $data['battery_level'] ?? null,
-                    ];
-                })->values(),
+                'alarms' => $processedAlarms, // Enviamos la lista procesada
                 'message' => $notifications->count() . ' alarmas encontradas'
             ]);
+
         } catch (\Exception $e) {
             Log::error('Error reporte alarmas:', ['msg' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
