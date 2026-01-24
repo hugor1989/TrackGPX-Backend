@@ -42,6 +42,10 @@ class LocationController extends Controller
             $lat = (float) $validated['latitude'];
             $lon = (float) $validated['longitude'];
 
+            // 🔥 AUTO-CORRECCIÓN: Si es longitud de México (aprox 80 a 120) pero viene POSITIVA, la volvemos NEGATIVA.
+            if ($lon > 80 && $lon < 120) {
+                $lon = $lon * -1; // Convertimos 103.28 en -103.28
+            }
             // =================================================================
             // 🛡️ ZONA DE SEGURIDAD: FILTROS DE CALIDAD DE DATOS
             // =================================================================
@@ -50,7 +54,7 @@ class LocationController extends Controller
             // Muchos GPS envían esto al encenderse o perder señal.
             if ($lat == 0 || $lon == 0) {
                 Log::warning('👻 Ghost Point (0,0) descartado.', ['imei' => $validated['imei']]);
-                
+
                 // IMPORTANTE: Retornamos 200 OK para que el dispositivo
                 // crea que se guardó y deje de enviar este paquete basura.
                 return response()->json(['success' => true, 'message' => 'Ghost point ignored'], 200);
@@ -63,7 +67,7 @@ class LocationController extends Controller
             if (!$isInsideMexico) {
                 Log::warning('🌍 Coordenada extranjera descartada.', [
                     'imei' => $validated['imei'],
-                    'lat' => $lat, 
+                    'lat' => $lat,
                     'lon' => $lon
                 ]);
                 return response()->json(['success' => true, 'message' => 'Foreign location ignored'], 200);
@@ -214,7 +218,6 @@ class LocationController extends Controller
                     'recipients_notified' => $recipients->count()
                 ]
             ], 201);
-
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json(['success' => false, 'message' => 'Error de validación', 'errors' => $e->errors()], 422);
         } catch (\Exception $e) {

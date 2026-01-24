@@ -99,16 +99,15 @@ class RouteController extends Controller
             $query = Location::where('device_id', $device->id)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 
-                // 1. FILTRO ANTI-GHOST (Ya lo tenías, bien hecho)
+                // 1. FILTRO ANTI-GHOST (Esto elimina el viaje de África/Océano)
                 ->where('latitude', '!=', 0)
                 ->where('longitude', '!=', 0)
 
-                // 2. 🔥 FILTRO SOLO MÉXICO (AGREGA ESTO)
-                // Esto ocultará cualquier punto que haya caído en África, China o el océano
-                ->whereBetween('latitude', [14.0, 33.5])
-                ->whereBetween('longitude', [-120.0, -86.0])
-
-                ->orderBy('timestamp', 'ASC'); // 🔥 CRÍTICO: Ordenar aquí
+                // ❌ ELIMINAMOS EL FILTRO DE MÉXICO TEMPORALMENTE
+                // Como tus datos son positivos (103.28), el filtro negativo los borraba.
+                // Al quitar esto, tus viajes volverán a aparecer.
+                
+                ->orderBy('timestamp', 'ASC');
 
             // Aplicar filtros
             if ($minSpeed > 0) $query->where('speed', '>=', $minSpeed);
