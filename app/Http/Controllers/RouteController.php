@@ -52,8 +52,82 @@ class RouteController extends Controller
         }
     }
 
-
     public function getRouteByDate(Request $request, $deviceId)
+    {
+        $validator = Validator::make($request->all(), [
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'detect_routes' => 'nullable|boolean',
+            'max_interval_minutes' => 'nullable|integer|min:1|max:1440',
+            'compress' => 'nullable|boolean',
+            'compress_factor' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        if ($validator->fails()) return response()->json(['success' => false, 'errors' => $validator->errors()], 400);
+
+        try {
+            $device = Device::findOrFail($deviceId);
+            $start = Carbon::parse($request->start_date)->startOfDay();
+            $end = Carbon::parse($request->end_date)->endOfDay();
+            $detectRoutes = $request->boolean('detect_routes', false);
+            $maxInterval = $request->max_interval_minutes ?? 5;
+
+            // 1. CONSULTA DE DATOS
+            $query = Location::where('device_id', $device->id)
+                ->whereBetween('timestamp', [$start, $end])
+                ->where('latitude', '!=', 0)
+                ->orderBy('timestamp', 'ASC'); // Vital para el orden
+
+            $locations = $query->get();
+
+            if ($locations->isEmpty()) {
+                return response()->json(['success' => true, 'routes' => [], 'message' => 'Sin datos']);
+            }
+
+            // 🔥 2. SANITIZACIÓN MAESTRA (FIX CHINA -> AMÉRICA)
+            // Esto arregla los datos antes de que la App los reciba
+            $locations->transform(function ($loc) {
+                $lat = (float)$loc->latitude;
+                $lon = (float)$loc->longitude;
+                // Si es positivo (Asia) y debe ser negativo (América)
+                if ($lon > 80 && $lon < 180) $lon = $lon * -1;
+                
+                $loc->latitude = $lat;
+                $loc->longitude = $lon;
+                return $loc;
+            });
+
+            // 3. PROCESAMIENTO
+            if ($detectRoutes) {
+                $routes = $this->detectMultipleRoutes($locations, $maxInterval, $device);
+                
+                // Compresión opcional
+                if ($request->compress) {
+                    $factor = $request->compress_factor ?? 10;
+                    foreach ($routes as &$route) {
+                        $route['points'] = $this->compressPoints($route['points'], $factor);
+                    }
+                }
+
+                return response()->json([
+                    'success' => true,
+                    'mode' => 'multiple_routes',
+                    'routes' => $routes,
+                    'total_routes' => count($routes)
+                ]);
+            }
+
+            // Modo Ruta Única
+            $route = $this->createSingleRoute($locations, $device);
+            return response()->json(['success' => true, 'mode' => 'single_route', 'route' => $route]);
+
+        } catch (\Exception $e) {
+            Log::error('Error getRouteByDate: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+   /*  public function getRouteByDate(Request $request, $deviceId)
     {
         $validator = Validator::make($request->all(), [
             'start_date' => 'required|date',
@@ -229,7 +303,7 @@ class RouteController extends Controller
                 'message' => 'Error al obtener ruta: ' . $e->getMessage()
             ], 500);
         }
-    }
+    } */
 
     /**
      * Crear una ruta única (modo original)
