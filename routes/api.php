@@ -22,6 +22,7 @@ use App\Http\Controllers\AdminDashboardController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\MemberController;
 use App\Http\Controllers\DeviceShareController;
+use App\Http\Controllers\EmergencyContactController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -180,7 +181,7 @@ Route::middleware('auth:customer')->group(function () {
     // GET: /api/devices/{deviceId}/route?start_date=...&end_date=...
     Route::post('devices/{deviceId}/route', [RouteController::class, 'getRouteByDate']);
 
-     Route::get('devices/{device}/activity',[RouteController::class, 'getActivityByDay']);
+    Route::get('devices/{device}/activity', [RouteController::class, 'getActivityByDay']);
 
     //Reportes
     Route::get('devices/{deviceId}/reports/alarms', [RouteController::class, 'getAlarmsReport']);
@@ -201,7 +202,7 @@ Route::middleware('auth:customer')->group(function () {
     Route::get('members', [MemberController::class, 'index']);               // listar miembros
     Route::post('members/{member}/devices', [MemberController::class, 'assignDevices']); // asignar devices
     Route::get('members/{member}/devices', [MemberController::class, 'devices']);
-    Route::post('members/{member}/invite-whatsapp',[MemberController::class, 'inviteWhatsapp']);
+    Route::post('members/{member}/invite-whatsapp', [MemberController::class, 'inviteWhatsapp']);
 
     Route::prefix('notifications')->group(function () {
         Route::get('/get-all', [NotificationController::class, 'index']);
@@ -218,6 +219,13 @@ Route::middleware('auth:customer')->group(function () {
         Route::get('/statistics', [DashboardController::class, 'getStatistics']);
         Route::get('/devices', [DashboardController::class, 'getDevices']);
         Route::get('/device/{deviceId}/details', [DashboardController::class, 'getDeviceDetails']);
+    });
+
+    Route::prefix('contacts')->group(function () {
+        Route::get('users/{userId}/emergency-contacts', [EmergencyContactController::class, 'index']);
+        Route::post('users/{userId}/emergency-contacts', [EmergencyContactController::class, 'store']);
+        Route::put('emergency-contacts/{id}', [EmergencyContactController::class, 'update']);
+        Route::delete('emergency-contacts/{id}', [EmergencyContactController::class, 'destroy']);
     });
 
 
