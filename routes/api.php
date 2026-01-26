@@ -23,6 +23,7 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\MemberController;
 use App\Http\Controllers\DeviceShareController;
 use App\Http\Controllers\EmergencyContactController;
+use App\Http\Controllers\PanicController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -229,6 +230,7 @@ Route::middleware('auth:customer')->group(function () {
     });
 
 
+    Route::post('panic', [PanicController::class, 'trigger']);
     //Crear enlace de compartición
     Route::post('device/create-share-link', [DeviceShareController::class, 'createShareLink']);
 });
