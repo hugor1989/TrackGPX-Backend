@@ -24,6 +24,7 @@ use App\Http\Controllers\MemberController;
 use App\Http\Controllers\DeviceShareController;
 use App\Http\Controllers\EmergencyContactController;
 use App\Http\Controllers\PanicController;
+use App\Http\Controllers\TaxInformationController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -233,6 +234,10 @@ Route::middleware('auth:customer')->group(function () {
     Route::post('panic', [PanicController::class, 'trigger']);
     //Crear enlace de compartición
     Route::post('device/create-share-link', [DeviceShareController::class, 'createShareLink']);
+
+    //Facturacion
+    Route::get('tax-info/get-data', [TaxInformationController::class, 'show']);
+    Route::post('tax-info/store', [TaxInformationController::class, 'store']);
 });
 
 #endregion
