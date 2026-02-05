@@ -84,7 +84,7 @@
                     {{ $alarm->message }}
                 </td>
                 <td>
-                    {{ $alarm->speed }}
+                    {{ $alarm->speed_kmh }}
                 </td>
                 <td>
                     @if($alarm->lat != 0)
