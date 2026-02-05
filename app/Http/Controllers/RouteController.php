@@ -1448,9 +1448,10 @@ class RouteController extends Controller
                     if ($lon > 80 && $lon < 180) $lon = $lon * -1;
 
                     // CORRECCIÓN VELOCIDAD: Busca en varios lugares
-                    $rawSpeed = $data['speed'] ?? $notif->speed ?? 0;
+                    $rawSpeed = $data['current_speed'] ?? $data['speed'] ?? $notif->speed ?? 0;
                     // Si tu GPS manda nudos, multiplica por 1.852. Si manda km/h, déjalo así.
-                    $notif->speed = round((float)$rawSpeed);
+                    // Asignamos el valor corregido al objeto para usarlo en la vista
+                    $notif->speed_kmh = round((float)$rawSpeed);
 
                     $notif->formatted_date = Carbon::parse($notif->created_at)->setTimezone($timezone);
                     $notif->lat = $lat;
