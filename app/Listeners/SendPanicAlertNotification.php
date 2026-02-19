@@ -39,7 +39,7 @@ class SendPanicAlertNotification implements ShouldQueue
             ]);
 
             // URL del Frontend Web
-            $liveLink = "https://track-gpx.com/live/" . $token;
+            $liveLink = "https://live-trackers.track-gpx.com/" . $token;
 
             // 2. PREPARAR EL MENSAJE CON EL LINK INCLUIDO
             $vehicleName = $device->vehicle ? ($device->vehicle->alias ?? $device->vehicle->plates) : $device->imei;
